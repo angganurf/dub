@@ -1,7 +1,6 @@
-import { prisma } from "@/lib/prisma";
-import { log } from "@dub/utils";
-import { sendEmail } from "emails";
-import FailedPayment from "emails/failed-payment";
+import { sendEmail } from "@dub/email";
+import { FailedPayment } from "@dub/email/templates/failed-payment";
+import { prisma } from "@dub/prisma";
 import Stripe from "stripe";
 
 export async function invoicePaymentFailed(event: Stripe.Event) {
@@ -12,10 +11,11 @@ export async function invoicePaymentFailed(event: Stripe.Event) {
   } = event.data.object as Stripe.Invoice;
 
   if (!stripeId) {
-    await log({
-      message: "Missing customer ID in invoice.payment_failed event",
-      type: "errors",
-    });
+    console.log(
+      "Invoice with Stripe ID *`" +
+        stripeId +
+        "`* not found in invoice.payment_failed event",
+    );
     return;
   }
 
@@ -24,6 +24,7 @@ export async function invoicePaymentFailed(event: Stripe.Event) {
       stripeId: stripeId.toString(),
     },
     select: {
+      id: true,
       name: true,
       slug: true,
       users: {
@@ -35,23 +36,36 @@ export async function invoicePaymentFailed(event: Stripe.Event) {
             },
           },
         },
+        where: {
+          user: {
+            isMachine: false,
+          },
+        },
       },
     },
   });
 
   if (!workspace) {
-    await log({
-      message: `Project with Stripe ID ${stripeId} not found in invoice.payment_failed event`,
-      type: "errors",
-    });
+    console.log(
+      "Workspace with Stripe ID *`" +
+        stripeId +
+        "`* not found in invoice.payment_failed event",
+    );
     return;
   }
 
-  await Promise.all(
-    workspace.users.map(({ user }) =>
+  await Promise.allSettled([
+    prisma.project.update({
+      where: {
+        id: workspace.id,
+      },
+      data: {
+        paymentFailedAt: new Date(),
+      },
+    }),
+    ...workspace.users.map(({ user }) =>
       sendEmail({
         email: user.email as string,
-        from: "steven@dub.co",
         subject: `${
           attemptCount == 2
             ? "2nd notice: "
@@ -70,7 +84,8 @@ export async function invoicePaymentFailed(event: Stripe.Event) {
             workspace={workspace}
           />
         ),
+        variant: "notifications",
       }),
     ),
-  );
+  ]);
 }

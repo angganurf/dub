@@ -1,11 +1,18 @@
 "use client";
+import { cn } from "@dub/utils";
 /* 
-  This Analytics component lives in 2 different places:
+  This Analytics component lives in several different places:
   1. Workspace analytics page, e.g. app.dub.co/dub/analytics
-  2. Public stats page, e.g. dub.co/stats/github, stey.me/stats/weathergpt
+  2. Public stats page, e.g. app.dub.co/share/dash_6NSA6vNm017MZwfzt8SubNSZ
+  3. Partner program links page, e.g. partners.dub.co/programs/dub/analytics
 */
 
-import AnalyticsProvider, { AnalyticsContext } from "./analytics-provider";
+import useWorkspace from "@/lib/swr/use-workspace";
+import { useContext } from "react";
+import AnalyticsProvider, {
+  AnalyticsContext,
+  AnalyticsDashboardProps,
+} from "./analytics-provider";
 import Devices from "./devices";
 import Locations from "./locations";
 import Main from "./main";
@@ -14,39 +21,49 @@ import Toggle from "./toggle";
 import TopLinks from "./top-links";
 
 export default function Analytics({
-  staticDomain,
-  staticUrl,
   adminPage,
-  demoPage,
+  dashboardProps,
 }: {
-  staticDomain?: string;
-  staticUrl?: string;
   adminPage?: boolean;
-  demoPage?: boolean;
+  dashboardProps?: AnalyticsDashboardProps;
 }) {
   return (
-    <AnalyticsProvider {...{ staticDomain, staticUrl, adminPage, demoPage }}>
+    <AnalyticsProvider {...{ adminPage, dashboardProps }}>
       <AnalyticsContext.Consumer>
-        {({ basePath }) => {
-          const isPublicStatsPage = basePath.startsWith("/stats");
+        {({ dashboardProps }) => {
           return (
-            <div className="bg-gray-50 py-10">
+            <div
+              className={cn("pb-10", dashboardProps && "bg-neutral-50 pt-10")}
+            >
               <Toggle />
-              <div className="mx-auto grid max-w-screen-xl gap-5 px-2.5 lg:px-20">
+              <div className="mx-auto grid max-w-screen-xl gap-5 px-3 lg:px-10">
                 <Main />
-                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                  {!isPublicStatsPage && <TopLinks />}
-                  <Locations />
-                  <Devices />
-                  <Referer />
-                  {isPublicStatsPage && <TopLinks />}
-                  {/* <Feedback /> */}
-                </div>
+                <StatsGrid />
               </div>
             </div>
           );
         }}
       </AnalyticsContext.Consumer>
     </AnalyticsProvider>
+  );
+}
+
+function StatsGrid() {
+  const { dashboardProps, partnerPage, selectedTab, view } =
+    useContext(AnalyticsContext);
+  const { plan } = useWorkspace();
+
+  const hide =
+    (selectedTab === "leads" || selectedTab === "sales" || view === "funnel") &&
+    (plan === "free" || plan === "pro");
+
+  return hide ? null : (
+    <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+      {!dashboardProps && <TopLinks />}
+      <Locations />
+      <Devices />
+      <Referer />
+      {/* <Feedback /> */}
+    </div>
   );
 }

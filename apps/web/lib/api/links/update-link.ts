@@ -1,20 +1,36 @@
-import { prisma } from "@/lib/prisma";
+import { getPartnerAndDiscount } from "@/lib/planetscale/get-partner-discount";
 import { isStored, storage } from "@/lib/storage";
 import { recordLink } from "@/lib/tinybird";
 import { LinkProps, ProcessedLinkProps } from "@/lib/types";
-import { formatRedisLink, redis } from "@/lib/upstash";
-import { SHORT_DOMAIN, getParamsFromURL, truncate } from "@dub/utils";
-import { Prisma } from "@prisma/client";
+import { propagateWebhookTriggerChanges } from "@/lib/webhook/update-webhook";
+import { prisma } from "@dub/prisma";
+import { Prisma } from "@dub/prisma/client";
+import {
+  R2_URL,
+  getParamsFromURL,
+  linkConstructorSimple,
+  nanoid,
+  truncate,
+} from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
-import { combineTagIds, transformLink } from "./utils";
+import { createId } from "../create-id";
+import { combineTagIds } from "../tags/combine-tag-ids";
+import { scheduleABTestCompletion } from "./ab-test-scheduler";
+import { linkCache } from "./cache";
+import { encodeKeyIfCaseSensitive } from "./case-sensitivity";
+import { includeTags } from "./include-tags";
+import { transformLink } from "./utils";
 
 export async function updateLink({
-  oldDomain = SHORT_DOMAIN,
-  oldKey,
+  oldLink,
   updatedLink,
 }: {
-  oldDomain?: string;
-  oldKey: string;
+  oldLink: {
+    domain: string;
+    key: string;
+    image?: string | null;
+    testCompletedAt?: Date | null;
+  };
   updatedLink: ProcessedLinkProps &
     Pick<LinkProps, "id" | "clicks" | "lastClicked" | "updatedAt">;
 }) {
@@ -29,9 +45,10 @@ export async function updateLink({
     image,
     proxy,
     geo,
+    publicStats,
   } = updatedLink;
-  const changedKey = key.toLowerCase() !== oldKey.toLowerCase();
-  const changedDomain = domain !== oldDomain;
+  const changedKey = key.toLowerCase() !== oldLink.key.toLowerCase();
+  const changedDomain = domain !== oldLink.domain;
 
   const { utm_source, utm_medium, utm_campaign, utm_term, utm_content } =
     getParamsFromURL(url);
@@ -45,10 +62,22 @@ export async function updateLink({
     tagId,
     tagIds,
     tagNames,
+    webhookIds,
+    testVariants,
+    testStartedAt,
+    testCompletedAt,
     ...rest
   } = updatedLink;
+  const changedTestCompletedAt = testCompletedAt !== oldLink.testCompletedAt;
 
   const combinedTagIds = combineTagIds({ tagId, tagIds });
+
+  const imageUrlNonce = nanoid(7);
+
+  key = encodeKeyIfCaseSensitive({
+    domain: updatedLink.domain,
+    key: updatedLink.key,
+  });
 
   const response = await prisma.link.update({
     where: {
@@ -57,26 +86,34 @@ export async function updateLink({
     data: {
       ...rest,
       key,
+      shortLink: linkConstructorSimple({
+        domain: updatedLink.domain,
+        key,
+      }),
       title: truncate(title, 120),
       description: truncate(description, 240),
       image:
         proxy && image && !isStored(image)
-          ? `${process.env.STORAGE_BASE_URL}/images/${id}`
+          ? `${R2_URL}/images/${id}_${imageUrlNonce}`
           : image,
-      utm_source,
-      utm_medium,
-      utm_campaign,
-      utm_term,
-      utm_content,
+      utm_source: utm_source || null,
+      utm_medium: utm_medium || null,
+      utm_campaign: utm_campaign || null,
+      utm_term: utm_term || null,
+      utm_content: utm_content || null,
       expiresAt: expiresAt ? new Date(expiresAt) : null,
       geo: geo || Prisma.JsonNull,
+
+      testVariants: testVariants || Prisma.JsonNull,
+      testCompletedAt: testCompletedAt ? new Date(testCompletedAt) : null,
+      testStartedAt: testStartedAt ? new Date(testStartedAt) : null,
 
       // Associate tags by tagNames
       ...(tagNames &&
         updatedLink.projectId && {
           tags: {
             deleteMany: {},
-            create: tagNames.map((tagName) => ({
+            create: tagNames.map((tagName, idx) => ({
               tag: {
                 connect: {
                   name_projectId: {
@@ -85,6 +122,7 @@ export async function updateLink({
                   },
                 },
               },
+              createdAt: new Date(new Date().getTime() + idx * 100), // increment by 100ms for correct order
             })),
           },
         }),
@@ -93,54 +131,83 @@ export async function updateLink({
       ...(combinedTagIds && {
         tags: {
           deleteMany: {},
-          create: combinedTagIds.map((tagId) => ({
+          create: combinedTagIds.map((tagId, idx) => ({
             tagId,
+            createdAt: new Date(new Date().getTime() + idx * 100), // increment by 100ms for correct order
           })),
+        },
+      }),
+
+      // Webhooks
+      ...(webhookIds && {
+        webhooks: {
+          deleteMany: {},
+          createMany: {
+            data: webhookIds.map((webhookId) => ({
+              webhookId,
+            })),
+          },
+        },
+      }),
+
+      // Shared dashboard
+      ...(publicStats && {
+        dashboard: {
+          create: {
+            id: createId({ prefix: "dash_" }),
+            projectId: updatedLink.projectId,
+            userId: updatedLink.userId,
+          },
         },
       }),
     },
     include: {
-      tags: {
-        select: {
-          tag: {
-            select: {
-              id: true,
-              name: true,
-              color: true,
-            },
-          },
-        },
-      },
+      ...includeTags,
+      webhooks: webhookIds ? true : false,
     },
   });
 
   waitUntil(
-    Promise.all([
+    Promise.allSettled([
       // record link in Redis
-      redis.hset(updatedLink.domain.toLowerCase(), {
-        [updatedLink.key.toLowerCase()]: await formatRedisLink(response),
+      linkCache.set({
+        ...response,
+        ...(response.programId &&
+          (await getPartnerAndDiscount({
+            programId: response.programId,
+            partnerId: response.partnerId,
+          }))),
       }),
+
       // record link in Tinybird
-      recordLink({
-        link_id: response.id,
-        domain: response.domain,
-        key: response.key,
-        url: response.url,
-        tag_ids: response.tags.map(({ tag }) => tag.id),
-        workspace_id: response.projectId,
-        created_at: response.createdAt,
-      }),
+      recordLink(response),
+
       // if key is changed: delete the old key in Redis
-      (changedDomain || changedKey) &&
-        redis.hdel(oldDomain.toLowerCase(), oldKey.toLowerCase()),
+      (changedDomain || changedKey) && linkCache.delete(oldLink),
+
       // if proxy is true and image is not stored in R2, upload image to R2
       proxy &&
         image &&
         !isStored(image) &&
-        storage.upload(`images/${id}`, image, {
+        storage.upload(`images/${id}_${imageUrlNonce}`, image, {
           width: 1200,
           height: 630,
         }),
+      // if there's a valid old image and it starts with the same link ID but is different from the new image, delete it
+      oldLink.image &&
+        oldLink.image.startsWith(`${R2_URL}/images/${id}`) &&
+        oldLink.image !== image &&
+        storage.delete(oldLink.image.replace(`${R2_URL}/`, "")),
+
+      webhookIds != undefined &&
+        propagateWebhookTriggerChanges({
+          webhookIds,
+        }),
+
+      changedTestCompletedAt &&
+        testVariants &&
+        testCompletedAt &&
+        scheduleABTestCompletion(response),
     ]),
   );
 

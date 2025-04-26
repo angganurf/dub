@@ -1,71 +1,59 @@
-import { anthropic } from "@/lib/anthropic";
-import { DubApiError, handleAndReturnErrorResponse } from "@/lib/api/errors";
-import { withWorkspaceEdge } from "@/lib/auth/workspace-edge";
-import { prismaEdge } from "@/lib/prisma/edge";
+import { handleAndReturnErrorResponse } from "@/lib/api/errors";
+import { throwIfAIUsageExceeded } from "@/lib/api/links/usage-checks";
+import { normalizeWorkspaceId } from "@/lib/api/workspace-id";
+import { withWorkspace } from "@/lib/auth";
 import z from "@/lib/zod";
+import { anthropic } from "@ai-sdk/anthropic";
+import { prismaEdge } from "@dub/prisma/edge";
 import { waitUntil } from "@vercel/functions";
-import { AnthropicStream, StreamingTextResponse } from "ai";
-
-export const runtime = "edge";
+import { streamText } from "ai";
 
 const completionSchema = z.object({
   prompt: z.string(),
   model: z
-    .enum(["claude-3-haiku-20240307", "claude-3-sonnet-20240229"])
+    .enum(["claude-3-haiku-20240307", "claude-3-5-sonnet-latest"])
     .optional()
-    .default("claude-3-sonnet-20240229"),
+    .default("claude-3-5-sonnet-latest"),
 });
 
 // POST /api/ai/completion – Generate AI completion
-export const POST = withWorkspaceEdge(
-  async ({ req, workspace }) => {
-    if (!anthropic) {
-      console.error("Anthropic is not configured. Skipping the request.");
-      throw new DubApiError({
-        code: "bad_request",
-        message: "Anthropic API key is not configured.",
-      });
-    }
+export const POST = withWorkspace(async ({ req, workspace }) => {
+  try {
+    const {
+      // comment for better diff
+      prompt,
+      model,
+    } = completionSchema.parse(await req.json());
 
-    try {
-      const {
-        // comment for better diff
-        prompt,
-        model,
-      } = completionSchema.parse(await req.json());
+    throwIfAIUsageExceeded(workspace);
 
-      const response = await anthropic.messages.create({
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        model,
-        stream: true,
-        max_tokens: 300,
-      });
+    const result = streamText({
+      model: anthropic(model),
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      maxTokens: 300,
+    });
 
-      const stream = AnthropicStream(response);
-
-      // only count usage for the sonnet model
-      if (model === "claude-3-sonnet-20240229") {
-        waitUntil(
-          prismaEdge.project.update({
-            where: { id: workspace.id.replace("ws_", "") },
-            data: {
-              aiUsage: {
-                increment: 1,
-              },
+    // only count usage for the sonnet model
+    if (model === "claude-3-5-sonnet-latest") {
+      waitUntil(
+        prismaEdge.project.update({
+          where: { id: normalizeWorkspaceId(workspace.id) },
+          data: {
+            aiUsage: {
+              increment: 1,
             },
-          }),
-        );
-      }
-
-      return new StreamingTextResponse(stream);
-    } catch (error) {
-      return handleAndReturnErrorResponse(error);
+          },
+        }),
+      );
     }
-  },
-  { needNotExceededAI: true },
-);
+
+    return result.toDataStreamResponse();
+  } catch (error) {
+    return handleAndReturnErrorResponse(error);
+  }
+});

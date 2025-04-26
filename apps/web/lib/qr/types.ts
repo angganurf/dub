@@ -19,9 +19,10 @@ export type QRProps = {
   level?: string;
   bgColor?: string;
   fgColor?: string;
+  margin?: number;
   style?: CSSProperties;
-  includeMargin?: boolean;
   imageSettings?: ImageSettings;
+  isOGContext?: boolean;
 };
 export type QRPropsCanvas = QRProps &
   React.CanvasHTMLAttributes<HTMLCanvasElement>;

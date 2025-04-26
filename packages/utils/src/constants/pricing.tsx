@@ -1,95 +1,18 @@
-import { nFormatter } from "../functions";
+import { INFINITY_NUMBER } from "./misc";
 
-const BUSINESS_PLAN_MODIFIER = ({
-  name = "Business",
-  monthly = 59,
-  yearly = 49,
-  links = 5000,
-  clicks = 150000,
-  domains = 40,
-  tags = 150,
-  users = 15,
-  ids = [],
-}: {
-  name: string;
-  monthly: number;
-  yearly: number;
-  links: number;
-  clicks: number;
-  domains: number;
-  users: number;
-  tags: number;
-  ids: string[];
-}) => ({
-  name,
-  tagline: "For larger teams with increased usage",
-  link: "https://dub.co/help/article/business-plan",
-  price: {
-    monthly,
-    yearly,
-    ids,
-  },
-  limits: {
-    links,
-    clicks,
-    domains,
-    tags,
-    users,
-    ai: 1000,
-  },
-  colors: {
-    bg: "bg-sky-900",
-    text: "text-sky-900",
-  },
-  cta: {
-    text: "Get started with Business",
-    shortText: "Get started",
-    href: "https://app.dub.co/register",
-    color: "bg-sky-900 hover:bg-sky-800 hover:ring-sky-100",
-  },
-  featureTitle: "Everything in Pro, plus:",
-  features: [
-    { text: `${nFormatter(links, { full: true })} new links/mo` },
-    {
-      text: `${nFormatter(clicks)} tracked clicks/mo`,
-    },
-    { text: "2-year analytics retention" },
-    { text: `${domains} custom domains` },
-    { text: `${users} users` },
-    {
-      text: `Unlimited AI credits`,
-      footnote: {
-        title:
-          "Subject to fair use policy – you will be notified if you exceed the limit, which are high enough for frequent usage.",
-        cta: "Learn more.",
-        href: "https://dub.co/blog/introducing-dub-ai",
-      },
-    },
-    {
-      text: `${nFormatter(tags, { full: true })} tags`,
-      footnote: {
-        title: "Organize your links with tags.",
-        cta: "Learn more.",
-        href: "https://dub.co/help/article/how-to-use-tags",
-      },
-    },
-    { text: "Elevated support", footnote: "Email and chat support." },
-    {
-      text: "Custom branding",
-      footnote: {
-        title:
-          "Set custom QR code logos, password-protected links logos, and more.",
-        cta: "Learn more.",
-        href: "https://dub.co/help/article/custom-qr-codes",
-      },
-    },
-  ],
-});
+export type PlanFeature = {
+  id?: string;
+  text: string;
+  tooltip?: {
+    title: string;
+    cta: string;
+    href: string;
+  };
+};
 
 export const PLANS = [
   {
     name: "Free",
-    tagline: "For hobby & side projects",
     price: {
       monthly: 0,
       yearly: 0,
@@ -97,51 +20,22 @@ export const PLANS = [
     limits: {
       links: 25,
       clicks: 1000,
+      sales: 0,
       domains: 3,
       tags: 5,
+      folders: 0,
       users: 1,
       ai: 10,
+      api: 60,
+      retention: "30-day",
     },
-    colors: {
-      bg: "bg-black",
-      text: "text-black",
-    },
-    cta: {
-      text: "Start for free",
-      href: "https://app.dub.co/register",
-      color: "bg-black hover:bg-gray-800 hover:ring-gray-200",
-    },
-    featureTitle: "What's included:",
-    features: [
-      { text: "25 new links/mo" },
-      {
-        text: "1K tracked clicks/mo",
-      },
-      { text: "30-day analytics retention" },
-      { text: "3 custom domains" },
-      { text: "1 user" },
-      { text: "10 AI credits/mo" },
-      {
-        text: "Community support",
-        footnote: "Help center + GitHub discussions.",
-      },
-      {
-        text: "API Access",
-        footnote: {
-          title: "Programatically manage your links using our REST API.",
-          cta: "Learn more.",
-          href: "https://dub.co/docs/api-reference/introduction",
-        },
-      },
-    ],
   },
   {
     name: "Pro",
-    tagline: "For startups & small businesses",
     link: "https://dub.co/help/article/pro-plan",
     price: {
-      monthly: 24,
-      yearly: 19,
+      monthly: 30,
+      yearly: 25,
       ids: [
         "price_1LodNLAlJJEpqkPVQSrt33Lc", // old monthly
         "price_1LodNLAlJJEpqkPVRxUyCQgZ", // old yearly
@@ -149,182 +43,287 @@ export const PLANS = [
         "price_1OYJeBAlJJEpqkPVLjTsjX0E", // new monthly (prod)
         "price_1OTcQBAlJJEpqkPVYlCMqdLL", // new yearly (test)
         "price_1OYJeBAlJJEpqkPVnPGEZeb0", // new yearly (prod)
+
+        // 2025 pricing
+        "price_1R8XtyAlJJEpqkPV5WZ4c0jF", //  yearly
+        "price_1R8XtEAlJJEpqkPV4opVvVPq", // monthly
+        "price_1R8XxZAlJJEpqkPVqGi0wOqD", // yearly (test),
+        "price_1R7oeBAlJJEpqkPVh6q5q3h8", // monthly (test),
       ],
     },
     limits: {
-      links: 1000,
-      clicks: 50000,
+      links: 1_000,
+      clicks: 50_000,
+      sales: 0,
       domains: 10,
       tags: 25,
-      users: 5,
+      folders: 3,
+      users: 3,
       ai: 1000,
-    },
-    colors: {
-      bg: "bg-blue-500",
-      text: "text-blue-500",
-    },
-    cta: {
-      text: "Get started with Pro",
-      shortText: "Get started",
-      href: "https://app.dub.co/register",
-      color: "bg-blue-500 hover:bg-blue-600 hover:ring-blue-100",
+      api: 600,
+      retention: "1-year",
     },
     featureTitle: "Everything in Free, plus:",
     features: [
-      { text: "1,000 new links/mo" },
+      { id: "clicks", text: "50K tracked clicks/mo" },
+      { id: "links", text: "1K new links/mo" },
+      { id: "retention", text: "1-year analytics retention" },
+      { id: "domains", text: "10 domains" },
+      { id: "users", text: "3 users" },
       {
-        text: "50K tracked clicks/mo",
+        id: "advanced",
+        text: "Advanced link features",
+        tooltip: "ADVANCED_LINK_FEATURES",
       },
-      { text: "1-year analytics retention" },
-      { text: "10 custom domains" },
-      { text: "5 users" },
       {
+        id: "ai",
         text: "Unlimited AI credits",
-        footnote: {
+        tooltip: {
           title:
             "Subject to fair use policy – you will be notified if you exceed the limit, which are high enough for frequent usage.",
           cta: "Learn more.",
           href: "https://dub.co/blog/introducing-dub-ai",
         },
       },
-      { text: "Basic support", footnote: "Basic email support." },
       {
-        text: "Root domain redirect",
-        footnote: {
+        id: "dotlink",
+        text: "Free .link domain",
+        tooltip: {
           title:
-            "Redirect vistors that land on the root of your domain (e.g. yourdomain.com) to a page of your choice.",
+            "All our paid plans come with a free .link custom domain, which helps improve click-through rates.",
           cta: "Learn more.",
-          href: "https://dub.co/help/article/how-to-redirect-root-domain",
+          href: "https://dub.co/help/article/free-dot-link-domain",
         },
       },
       {
-        text: "Advanced link features",
-        footnote:
-          "Custom social media cards, password-protected links, link expiration, link cloaking, device targeting, geo targeting etc.",
+        id: "folders",
+        text: "Link folders",
       },
-    ],
+      {
+        id: "deeplinks",
+        text: "Deep links",
+        tooltip: {
+          title:
+            "Redirect users to a specific page within your mobile application using deep links.",
+          cta: "Learn more.",
+          href: "https://dub.co//help/article/custom-domain-deep-links",
+        },
+      },
+    ] as PlanFeature[],
   },
-  BUSINESS_PLAN_MODIFIER({
+  {
     name: "Business",
-    monthly: 59,
-    yearly: 49,
-    links: 5000,
-    clicks: 150000,
-    domains: 40,
-    tags: 150,
-    users: 15,
-    ids: [
-      "price_1LodLoAlJJEpqkPV9rD0rlNL", // old monthly
-      "price_1LodLoAlJJEpqkPVJdwv5zrG", // oldest yearly
-      "price_1OZgmnAlJJEpqkPVOj4kV64R", // old yearly
-      "price_1OzNlmAlJJEpqkPV7s9HXNAC", // new monthly (test)
-      "price_1OzNmXAlJJEpqkPVYO89lTdx", // new yearly (test)
-      "price_1OzOFIAlJJEpqkPVJxzc9irl", // new monthly (prod)
-      "price_1OzOXMAlJJEpqkPV9ERrjjbw", // new yearly (prod)
-    ],
-  }),
-  BUSINESS_PLAN_MODIFIER({
-    name: "Business Plus",
-    monthly: 119,
-    yearly: 99,
-    links: 15000,
-    clicks: 400000,
-    domains: 100,
-    tags: 300,
-    users: 40,
-    ids: [
-      "price_1OnWu0AlJJEpqkPVWk4144ZG", // monthly (test)
-      "price_1OnWu0AlJJEpqkPVkDWVriAB", // yearly (test)
-      "price_1OnaK3AlJJEpqkPVaCfCPdHi", // monthly (prod)
-      "price_1OzObrAlJJEpqkPVh6D9HWGO", // yearly (prod)
-    ],
-  }),
-  BUSINESS_PLAN_MODIFIER({
-    name: "Business Extra",
-    monthly: 249,
-    yearly: 199,
-    links: 40000,
-    clicks: 1000000,
-    domains: 250,
-    tags: 500,
-    users: 100,
-    ids: [
-      "price_1OnWvCAlJJEpqkPVLzLHx5QD", // monthly (test)
-      "price_1OnWvCAlJJEpqkPVHhCCvIOq", // yearly (test)
-      "price_1OnaKJAlJJEpqkPVeJSvPfJb", // monthly (prod)
-      "price_1OzOg1AlJJEpqkPVPlsrxoWm", // yearly (prod)
-    ],
-  }),
-  BUSINESS_PLAN_MODIFIER({
-    name: "Business Max",
-    monthly: 499,
-    yearly: 399,
-    links: 100000,
-    clicks: 2500000,
-    domains: 500,
-    tags: 1000,
-    users: 250,
-    ids: [
-      "price_1OnWwLAlJJEpqkPVXtJyPqLk", // monthly (test)
-      "price_1OnWwLAlJJEpqkPV4eMbOkNh", // yearly (test)
-      "price_1OnaKOAlJJEpqkPVV6gkZPgt", // monthly (prod)
-      "price_1OzOh5AlJJEpqkPVtCSX7dlE", // yearly (prod)
-    ],
-  }),
+    price: {
+      monthly: 90,
+      yearly: 75,
+      ids: [
+        "price_1LodLoAlJJEpqkPV9rD0rlNL", // old monthly
+        "price_1LodLoAlJJEpqkPVJdwv5zrG", // oldest yearly
+        "price_1OZgmnAlJJEpqkPVOj4kV64R", // old yearly
+        "price_1OzNlmAlJJEpqkPV7s9HXNAC", // new monthly (test)
+        "price_1OzNmXAlJJEpqkPVYO89lTdx", // new yearly (test)
+        "price_1OzOFIAlJJEpqkPVJxzc9irl", // new monthly (prod)
+        "price_1OzOXMAlJJEpqkPV9ERrjjbw", // new yearly (prod)
+
+        // 2025 pricing
+        "price_1R3j01AlJJEpqkPVXuG1eNzm", //  yearly
+        "price_1R6JedAlJJEpqkPVMUkfjch4", // monthly
+        "price_1R8XypAlJJEpqkPVdjzOcYUC", // yearly (test),
+        "price_1R7ofLAlJJEpqkPV3MlgDpyx", // monthly (test),
+      ],
+    },
+    limits: {
+      links: 10_000,
+      clicks: 250_000,
+      sales: 25_000_00,
+      domains: 100,
+      tags: INFINITY_NUMBER,
+      folders: 20,
+      users: 10,
+      ai: 1000,
+      api: 3000,
+      retention: "3-year",
+    },
+    featureTitle: "Everything in Pro, plus:",
+    features: [
+      {
+        id: "clicks",
+        text: "250K tracked clicks/mo",
+      },
+      {
+        id: "links",
+        text: "10K new links/mo",
+      },
+      {
+        id: "retention",
+        text: "3-year analytics retention",
+      },
+      {
+        id: "sales",
+        text: "$25K tracked sales/mo",
+        tooltip: {
+          title:
+            "Use Dub Conversions to track how your link clicks are converting to signups and sales. Limits are based on the total sale amount tracked within a given month.",
+          cta: "Learn more.",
+          href: "https://d.to/conversions",
+        },
+      },
+      {
+        id: "users",
+        text: "10 users",
+      },
+      {
+        id: "events",
+        text: "Real-time events stream",
+        tooltip: {
+          title:
+            "Get more data on your link clicks and QR code scans with a detailed, real-time stream of events in your workspace",
+          cta: "Learn more.",
+          href: "https://dub.co/help/article/real-time-events-stream",
+        },
+      },
+      {
+        id: "partners",
+        text: "Partner management",
+        tooltip: {
+          title: "Use Dub Partners to manage and pay out your affiliates.",
+          cta: "Learn more.",
+          href: "https://dub.co/partners",
+        },
+      },
+      {
+        id: "payouts",
+        text: "1-click global payouts",
+        tooltip: {
+          title: "Send payouts to 180+ countries in 1-click.",
+          cta: "Learn more.",
+          href: "https://dub.co/help/article/partner-payouts",
+        },
+      },
+      {
+        id: "webhooks",
+        text: "Event webhooks",
+        tooltip: {
+          title:
+            "Get real-time notifications when a link is clicked or a QR code is scanned using webhooks.",
+          cta: "Learn more.",
+          href: "https://dub.co/docs/concepts/webhooks/introduction",
+        },
+      },
+      {
+        id: "tests",
+        text: "A/B testing",
+      },
+    ] as PlanFeature[],
+  },
+  {
+    name: "Advanced",
+    price: {
+      monthly: 300,
+      yearly: 250,
+      ids: [
+        // 2025 pricing
+        "price_1R8Xw4AlJJEpqkPV6nwdink9", //  yearly
+        "price_1R3j0qAlJJEpqkPVkfGNXRwb", // monthly
+        "price_1R8XztAlJJEpqkPVnHmIU2tf", // yearly (test),
+        "price_1R7ofzAlJJEpqkPV0L2TwyJo", // monthly (test),
+      ],
+    },
+    limits: {
+      links: 50_000,
+      clicks: 1_000_000,
+      sales: 100_000_00,
+      domains: 250,
+      tags: INFINITY_NUMBER,
+      folders: 50,
+      users: 20,
+      ai: 1000,
+      api: 3000,
+      retention: "5-year",
+    },
+    featureTitle: "Everything in Business, plus:",
+    features: [
+      {
+        id: "clicks",
+        text: "1M tracked clicks/mo",
+      },
+      {
+        id: "links",
+        text: "50K new links/mo",
+      },
+      {
+        id: "retention",
+        text: "5-year analytics retention",
+      },
+      {
+        id: "sales",
+        text: "$100K tracked sales/mo",
+        tooltip: {
+          title:
+            "Use Dub Conversions to track how your link clicks are converting to signups and sales. Limits are based on the total sale amount tracked within a given month.",
+          cta: "Learn more.",
+          href: "https://d.to/conversions",
+        },
+      },
+      {
+        id: "users",
+        text: "20 users",
+      },
+      {
+        id: "roles",
+        text: "Folders RBAC",
+      },
+      {
+        id: "whitelabel",
+        text: "White-labeling support",
+      },
+      {
+        id: "volume",
+        text: "Lower payout fees",
+        tooltip: {
+          title: "Lower fees associated with Partner payouts.",
+          cta: "Learn more.",
+          href: "https://dub.co/help/article/partner-payouts",
+        },
+      },
+      {
+        id: "email",
+        text: "Branded email domains",
+      },
+      {
+        id: "slack",
+        text: "Priority Slack support",
+      },
+    ] as PlanFeature[],
+  },
   {
     name: "Enterprise",
-    tagline:
-      "Custom tailored plans for large enterprises. Whether you're running a SMS campaign with millions of short links or a large marketing campaign with billions of clicks, we've got you covered.",
-    link: "https://dub.co/enterprise",
     price: {
       monthly: null,
       yearly: null,
     },
     limits: {
-      links: null,
-      clicks: null,
-      domains: null,
+      links: 250000,
+      clicks: 5000000,
+      sales: 1000000_00,
+      domains: 1000,
+      tags: INFINITY_NUMBER,
+      folders: INFINITY_NUMBER,
+      users: 500,
+      ai: 10000,
+      api: 10000,
+      retention: "Unlimited",
     },
-    colors: {
-      bg: "bg-violet-600",
-      text: "text-violet-600",
-    },
-    cta: {
-      text: "Contact us",
-      href: "/enterprise",
-      color: "bg-violet-600 hover:bg-violet-700 hover:ring-violet-100",
-    },
-    featureTitle: "Everything in Business, plus:",
-    features: [
-      { text: "Custom usage limits" },
-      { text: "Volume discounts" },
-      { text: "SSO/SAML" },
-      { text: "Role-based access controls" },
-      { text: "Custom contract & SLA" },
-      { text: "Whiteglove onboarding" },
-      { text: "Dedicated success manager" },
-      { text: "Priority support" },
-      { text: "Dedicated Slack channel" },
-    ],
   },
 ];
 
 export const FREE_PLAN = PLANS.find((plan) => plan.name === "Free")!;
 export const PRO_PLAN = PLANS.find((plan) => plan.name === "Pro")!;
 export const BUSINESS_PLAN = PLANS.find((plan) => plan.name === "Business")!;
-export const ENTERPRISE_PLAN = PLANS.find(
-  (plan) => plan.name === "Enterprise",
-)!;
+export const ADVANCED_PLAN = PLANS.find((plan) => plan.name === "Advanced")!;
 
-export const PUBLIC_PLANS = [
-  FREE_PLAN,
-  PRO_PLAN,
-  BUSINESS_PLAN,
-  ENTERPRISE_PLAN,
-];
-
-export const SELF_SERVE_PAID_PLANS = PLANS.filter(
-  (p) => p.name !== "Free" && p.name !== "Enterprise",
+export const SELF_SERVE_PAID_PLANS = PLANS.filter((p) =>
+  ["Pro", "Business", "Advanced"].includes(p.name),
 );
 
 export const FREE_WORKSPACES_LIMIT = 2;
@@ -339,9 +338,25 @@ export const getPlanDetails = (plan: string) => {
   )!;
 };
 
+export const getCurrentPlan = (plan: string) => {
+  return (
+    PLANS.find((p) => p.name.toLowerCase() === plan.toLowerCase()) || FREE_PLAN
+  );
+};
+
 export const getNextPlan = (plan?: string | null) => {
   if (!plan) return PRO_PLAN;
   return PLANS[
     PLANS.findIndex((p) => p.name.toLowerCase() === plan.toLowerCase()) + 1
   ];
+};
+
+export const isDowngradePlan = (currentPlan: string, newPlan: string) => {
+  const currentPlanIndex = PLANS.findIndex(
+    (p) => p.name.toLowerCase() === currentPlan.toLowerCase(),
+  );
+  const newPlanIndex = PLANS.findIndex(
+    (p) => p.name.toLowerCase() === newPlan.toLowerCase(),
+  );
+  return currentPlanIndex > newPlanIndex;
 };

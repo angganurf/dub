@@ -1,7 +1,7 @@
 import { exceededLimitError } from "@/lib/api/errors";
 import { withSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { PlanProps } from "@/lib/types";
+import { prisma } from "@dub/prisma";
 import { NextResponse } from "next/server";
 
 // POST /api/workspaces/[idOrSlug]/invites/accept – accept a workspace invite
@@ -16,6 +16,7 @@ export const POST = withSession(async ({ session, params }) => {
     },
     select: {
       expires: true,
+      role: true,
       project: {
         select: {
           id: true,
@@ -24,7 +25,13 @@ export const POST = withSession(async ({ session, params }) => {
           usersLimit: true,
           _count: {
             select: {
-              users: true,
+              users: {
+                where: {
+                  user: {
+                    isMachine: false,
+                  },
+                },
+              },
             },
           },
         },
@@ -58,8 +65,11 @@ export const POST = withSession(async ({ session, params }) => {
     prisma.projectUsers.create({
       data: {
         userId: session.user.id,
-        role: "member",
+        role: invite.role,
         projectId: workspace.id,
+        notificationPreference: {
+          create: {}, // by default, users are opted in to all notifications
+        },
       },
     }),
     prisma.projectInvite.delete({

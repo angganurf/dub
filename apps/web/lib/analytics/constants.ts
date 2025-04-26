@@ -1,42 +1,65 @@
-export const intervals = [
+import { THE_BEGINNING_OF_TIME } from "@dub/utils";
+
+export const DATE_RANGE_INTERVAL_PRESETS = [
   "24h",
   "7d",
   "30d",
   "90d",
-  "ytd",
   "1y",
+  "mtd",
+  "qtd",
+  "ytd",
   "all",
-  "all_unfiltered",
 ] as const;
+
+export const DUB_LINKS_ANALYTICS_INTERVAL = "24h";
+export const DUB_PARTNERS_ANALYTICS_INTERVAL = "30d";
 
 export const INTERVAL_DISPLAYS = [
   {
     display: "Last 24 hours",
     value: "24h",
+    shortcut: "d",
   },
   {
     display: "Last 7 days",
     value: "7d",
+    shortcut: "w",
   },
   {
     display: "Last 30 days",
     value: "30d",
+    shortcut: "t",
   },
   {
     display: "Last 3 months",
     value: "90d",
-  },
-  {
-    display: "Year to Date",
-    value: "ytd",
+    shortcut: "3",
   },
   {
     display: "Last 12 months",
     value: "1y",
+    shortcut: "l",
+  },
+  {
+    display: "Month to Date",
+    value: "mtd",
+    shortcut: "m",
+  },
+  {
+    display: "Quarter to Date",
+    value: "qtd",
+    shortcut: "q",
+  },
+  {
+    display: "Year to Date",
+    value: "ytd",
+    shortcut: "y",
   },
   {
     display: "All Time",
     value: "all",
+    shortcut: "a",
   },
 ];
 
@@ -63,17 +86,28 @@ export const INTERVAL_DATA: Record<
     startDate: new Date(Date.now() - 7776000000),
     granularity: "day",
   },
-  ytd: {
-    startDate: new Date(new Date().getFullYear(), 0, 1),
-    granularity: "month",
-  },
   "1y": {
     startDate: new Date(Date.now() - 31556952000),
     granularity: "month",
   },
+  mtd: {
+    startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+    granularity: "day",
+  },
+  qtd: {
+    startDate: new Date(
+      new Date().getFullYear(),
+      Math.floor(new Date().getMonth() / 3) * 3,
+      1,
+    ),
+    granularity: "day",
+  },
+  ytd: {
+    startDate: new Date(new Date().getFullYear(), 0, 1),
+    granularity: "month",
+  },
   all: {
-    // Dub.co founding date
-    startDate: new Date("2022-09-22"),
+    startDate: THE_BEGINNING_OF_TIME,
     granularity: "month",
   },
 };
@@ -81,24 +115,42 @@ export const INTERVAL_DATA: Record<
 export const VALID_ANALYTICS_ENDPOINTS = [
   "count",
   "timeseries",
+  "continents",
+  "regions",
   "countries",
   "cities",
   "devices",
   "browsers",
   "os",
+  "trigger", // deprecated, but keeping for now for backwards compatibility
+  "triggers",
   "referers",
+  "referer_urls",
   "top_links",
   "top_urls",
-  "trigger",
+  "utm_sources",
+  "utm_mediums",
+  "utm_campaigns",
+  "utm_terms",
+  "utm_contents",
 ] as const;
 
 export const SINGULAR_ANALYTICS_ENDPOINTS = {
+  continents: "continent",
+  regions: "region",
   countries: "country",
   cities: "city",
   devices: "device",
   browsers: "browser",
   referers: "referer",
+  referer_urls: "refererUrl",
   os: "os",
+  triggers: "trigger",
+  utm_sources: "utm_source",
+  utm_mediums: "utm_medium",
+  utm_campaigns: "utm_campaign",
+  utm_terms: "utm_term",
+  utm_contents: "utm_content",
 };
 
 export const VALID_ANALYTICS_FILTERS = [
@@ -109,17 +161,59 @@ export const VALID_ANALYTICS_FILTERS = [
   "end",
   "country",
   "city",
+  "region",
+  "continent",
   "device",
   "browser",
   "os",
+  "trigger",
   "referer",
+  "refererUrl",
   "url",
   "tagId",
-  "qr",
+  "folderId",
+  "tagIds",
+  "customerId",
+  "qr", // deprecated, but keeping for now for backwards compatibility
   "root",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
 ];
 
-export const EVENT_TYPES = ["clicks", "leads", "sales", "composite"] as const;
+// possible analytics filters for a given linkId
+export const DIMENSIONAL_ANALYTICS_FILTERS = [
+  "country",
+  "city",
+  "region",
+  "continent",
+  "device",
+  "browser",
+  "os",
+  "trigger",
+  "referer",
+  "refererUrl",
+  "url",
+  "qr", // deprecated, but keeping for now for backwards compatibility
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+];
+
+export const TRIGGER_DISPLAY = {
+  qr: "QR Scan",
+  link: "Link Click",
+};
+export const TRIGGER_TYPES = ["qr", "link"] as const;
+
+export const EVENT_TYPES = ["clicks", "leads", "sales"] as const;
+
+export const ANALYTICS_VIEWS = ["timeseries", "funnel"] as const;
+export const ANALYTICS_SALE_UNIT = ["sales", "saleAmount"] as const;
 
 export const OLD_ANALYTICS_ENDPOINTS = [
   "clicks",
@@ -134,6 +228,8 @@ export const OLD_ANALYTICS_ENDPOINTS = [
   "browsers",
   "browser",
   "os",
+  "triggers",
+  "trigger",
   "referers",
   "referer",
   "top_links",
@@ -148,6 +244,7 @@ export const OLD_TO_NEW_ANALYTICS_ENDPOINTS = {
   device: "devices",
   browser: "browsers",
   os: "os",
+  trigger: "triggers",
   referer: "referers",
   top_links: "top_links",
   top_urls: "top_urls",

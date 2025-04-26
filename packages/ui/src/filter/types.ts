@@ -10,8 +10,10 @@ export type Filter = {
   key: string;
   icon: FilterIcon;
   label: string;
+  shouldFilter?: boolean;
   separatorAfter?: boolean;
   options: FilterOption[] | null;
+  multiple?: boolean;
   getOptionIcon?: (
     value: FilterOption["value"],
     props: { key: Filter["key"]; option?: FilterOption },
@@ -27,5 +29,6 @@ export type FilterOption = {
   label: string;
   right?: ReactNode;
   icon?: FilterIcon;
+  hideDuringSearch?: boolean;
   data?: Record<string, any>;
 };

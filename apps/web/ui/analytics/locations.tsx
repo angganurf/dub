@@ -1,24 +1,40 @@
 import { SINGULAR_ANALYTICS_ENDPOINTS } from "@/lib/analytics/constants";
 import { useRouterStuff } from "@dub/ui";
-import { COUNTRIES } from "@dub/utils";
-import { useState } from "react";
+import {
+  FlagWavy,
+  LocationPin,
+  MapPosition,
+  OfficeBuilding,
+} from "@dub/ui/icons";
+import { CONTINENTS, COUNTRIES, REGIONS } from "@dub/utils";
+import { useContext, useState } from "react";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsLoadingSpinner } from "./analytics-loading-spinner";
+import { AnalyticsContext } from "./analytics-provider";
 import BarList from "./bar-list";
+import ContinentIcon from "./continent-icon";
 import { useAnalyticsFilterOption } from "./utils";
 
 export default function Locations() {
-  const { queryParams } = useRouterStuff();
+  const { queryParams, searchParams } = useRouterStuff();
 
-  const [tab, setTab] = useState<"countries" | "cities">("countries");
-  const data = useAnalyticsFilterOption(tab);
+  const { selectedTab, saleUnit } = useContext(AnalyticsContext);
+  const dataKey = selectedTab === "sales" ? saleUnit : "count";
+
+  const [tab, setTab] = useState<
+    "countries" | "cities" | "regions" | "continents"
+  >("countries");
+
+  const { data } = useAnalyticsFilterOption(tab);
   const singularTabName = SINGULAR_ANALYTICS_ENDPOINTS[tab];
 
   return (
     <AnalyticsCard
       tabs={[
-        { id: "countries", label: "Countries" },
-        { id: "cities", label: "Cities" },
+        { id: "countries", label: "Countries", icon: FlagWavy },
+        { id: "cities", label: "Cities", icon: OfficeBuilding },
+        { id: "regions", label: "Regions", icon: LocationPin },
+        { id: "continents", label: "Continents", icon: MapPosition },
       ]}
       selectedTabId={tab}
       onSelectTab={setTab}
@@ -31,25 +47,43 @@ export default function Locations() {
             <BarList
               tab={singularTabName}
               data={
-                data?.map((d) => ({
-                  icon: (
-                    <img
-                      alt={d.country}
-                      src={`https://flag.vercel.app/m/${d.country}.svg`}
-                      className="h-3 w-5"
-                    />
-                  ),
-                  title: tab === "countries" ? COUNTRIES[d.country] : d.city,
-                  href: queryParams({
-                    set: {
-                      [singularTabName]: d[singularTabName],
-                    },
-                    getNewPath: true,
-                  }) as string,
-                  value: d.count || 0,
-                })) || []
+                data
+                  ?.map((d) => ({
+                    icon:
+                      tab === "continents" ? (
+                        <ContinentIcon
+                          display={d.continent}
+                          className="size-3"
+                        />
+                      ) : (
+                        <img
+                          alt={d.country}
+                          src={`https://flag.vercel.app/m/${d.country}.svg`}
+                          className="h-3 w-5"
+                        />
+                      ),
+                    title:
+                      tab === "continents"
+                        ? CONTINENTS[d.continent]
+                        : tab === "countries"
+                          ? COUNTRIES[d.country]
+                          : `${tab === "cities" ? `${d.city}, ` : ""}${REGIONS[d.region] || d.region.split("-")[1]}`,
+                    href: queryParams({
+                      ...(searchParams.has(singularTabName)
+                        ? { del: singularTabName }
+                        : {
+                            set: {
+                              [singularTabName]: d[singularTabName],
+                            },
+                          }),
+                      getNewPath: true,
+                    }) as string,
+                    value: d[dataKey] || 0,
+                  }))
+                  ?.sort((a, b) => b.value - a.value) || []
               }
-              maxValue={(data && data[0]?.count) || 0}
+              unit={selectedTab}
+              maxValue={Math.max(...data?.map((d) => d[dataKey] ?? 0)) ?? 0}
               barBackground="bg-blue-100"
               hoverBackground="hover:bg-gradient-to-r hover:from-blue-50 hover:to-transparent hover:border-blue-500"
               setShowModal={setShowModal}
@@ -57,11 +91,11 @@ export default function Locations() {
             />
           ) : (
             <div className="flex h-[300px] items-center justify-center">
-              <p className="text-sm text-gray-600">No data available</p>
+              <p className="text-sm text-neutral-600">No data available</p>
             </div>
           )
         ) : (
-          <div className="flex h-[300px] items-center justify-center">
+          <div className="absolute inset-0 flex h-[300px] w-full items-center justify-center bg-white/50">
             <AnalyticsLoadingSpinner />
           </div>
         )

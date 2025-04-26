@@ -1,12 +1,13 @@
-import { Project, User } from "@prisma/client";
+import { Project, User } from "@dub/prisma/client";
 import { type TaskContext } from "vitest";
 import { z } from "zod";
 import { HttpClient } from "../utils/http";
 import { env, integrationTestEnv } from "./env";
+import { E2E_USER_ID, E2E_WORKSPACE_ID } from "./resource";
 
 interface Resources {
   user: Pick<User, "id">;
-  workspace: Pick<Project, "id" | "slug" | "name"> & { workspaceId: string };
+  workspace: Pick<Project, "id" | "slug" | "name" | "webhookEnabled">;
   apiKey: { token: string };
 }
 
@@ -31,7 +32,7 @@ export class IntegrationHarness {
 
   async init() {
     const user = {
-      id: this.env.E2E_USER_ID,
+      id: E2E_USER_ID,
     };
 
     const apiKey = {
@@ -39,18 +40,16 @@ export class IntegrationHarness {
     };
 
     const workspace = {
-      id: this.env.E2E_WORKSPACE_ID,
-      slug: this.env.E2E_WORKSPACE_SLUG,
-      name: this.env.E2E_WORKSPACE_NAME,
+      id: E2E_WORKSPACE_ID,
+      slug: "acme",
+      name: "Acme, Inc.",
+      webhookEnabled: true,
     };
 
     this.resources = {
       user,
       apiKey,
-      workspace: {
-        ...workspace,
-        workspaceId: workspace.id,
-      },
+      workspace,
     };
 
     return { ...this.resources, http: this.http };
@@ -58,31 +57,40 @@ export class IntegrationHarness {
 
   // Delete link
   public async deleteLink(id: string) {
-    const { workspaceId } = this.resources.workspace;
+    if (!id) return;
 
     await this.http.delete({
       path: `/links/${id}`,
-      query: { workspaceId },
     });
   }
 
   // Delete tag
   public async deleteTag(id: string) {
-    const { workspaceId } = this.resources.workspace;
+    if (!id) return;
 
     await this.http.delete({
       path: `/tags/${id}`,
-      query: { workspaceId },
     });
   }
 
   // Delete domain
   public async deleteDomain(slug: string) {
-    const { workspaceId } = this.resources.workspace;
-
     await this.http.delete({
       path: `/domains/${slug}`,
-      query: { workspaceId },
+    });
+  }
+
+  // Delete customer
+  public async deleteCustomer(id: string) {
+    await this.http.delete({
+      path: `/customers/${id}`,
+    });
+  }
+
+  // Delete folder
+  public async deleteFolder(id: string) {
+    await this.http.delete({
+      path: `/folders/${id}`,
     });
   }
 }

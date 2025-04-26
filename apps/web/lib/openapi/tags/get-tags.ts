@@ -1,8 +1,7 @@
 import { openApiErrorResponses } from "@/lib/openapi/responses";
 import z from "@/lib/zod";
-import { TagSchema } from "@/lib/zod/schemas/tags";
+import { getTagsQuerySchema, TagSchema } from "@/lib/zod/schemas/tags";
 import { ZodOpenApiOperationObject } from "zod-openapi";
-import { workspaceParamsSchema } from "../request";
 
 export const getTags: ZodOpenApiOperationObject = {
   operationId: "getTags",
@@ -10,7 +9,7 @@ export const getTags: ZodOpenApiOperationObject = {
   summary: "Retrieve a list of tags",
   description: "Retrieve a list of tags for the authenticated workspace.",
   requestParams: {
-    query: workspaceParamsSchema,
+    query: getTagsQuerySchema,
   },
   responses: {
     "200": {

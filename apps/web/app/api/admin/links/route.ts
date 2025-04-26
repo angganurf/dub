@@ -1,6 +1,6 @@
 import { withAdmin } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { DUB_DOMAINS_ARRAY } from "@dub/utils";
+import { prisma } from "@dub/prisma";
+import { DUB_DOMAINS_ARRAY, LEGAL_USER_ID } from "@dub/utils";
 import { NextResponse } from "next/server";
 
 // GET /api/admin/links
@@ -26,16 +26,31 @@ export const GET = withAdmin(async ({ searchParams }) => {
               in: DUB_DOMAINS_ARRAY,
             },
           }),
-      ...(search && {
-        OR: [
-          {
-            key: { contains: search },
+      OR: [
+        {
+          userId: {
+            not: LEGAL_USER_ID,
           },
-          {
-            url: { contains: search },
-          },
-        ],
-      }),
+        },
+        {
+          userId: null,
+        },
+      ],
+      ...(search &&
+        (search.startsWith("https://")
+          ? {
+              shortLink: search,
+            }
+          : {
+              OR: [
+                {
+                  shortLink: { contains: search },
+                },
+                {
+                  url: { contains: search },
+                },
+              ],
+            })),
     },
     include: {
       user: true,

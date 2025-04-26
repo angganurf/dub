@@ -1,12 +1,29 @@
-import { cn } from "@dub/utils";
+import { cn, resizeImage } from "@dub/utils";
 import { VariantProps, cva } from "class-variance-authority";
-import { UploadCloud } from "lucide-react";
 import { DragEvent, ReactNode, useState } from "react";
 import { toast } from "sonner";
-import { LoadingCircle } from "./icons";
+import { CloudUpload, Icon, LoadingCircle } from "./icons";
+
+type AcceptedFileFormats =
+  | "any"
+  | "images"
+  | "csv"
+  | "documents"
+  | "programResourceImages"
+  | "programResourceFiles";
+
+const documentTypes = [
+  "application/pdf", // .pdf
+  "text/plain", // .txt
+  "application/msword", // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "application/vnd.ms-excel", // .xls
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+  "text/csv", // .csv
+];
 
 const acceptFileTypes: Record<
-  string,
+  AcceptedFileFormats,
   { types: string[]; errorMessage?: string }
 > = {
   any: { types: [] },
@@ -14,14 +31,32 @@ const acceptFileTypes: Record<
     types: ["image/png", "image/jpeg"],
     errorMessage: "File type not supported (.png or .jpg only)",
   },
+  csv: {
+    types: ["text/csv"],
+    errorMessage: "File type not supported (.csv only)",
+  },
+  documents: {
+    types: documentTypes,
+    errorMessage: "File type not supported (document files only)",
+  },
+
+  // TODO: allow custom `accept` prop so we don't need specific options here
+  programResourceImages: {
+    types: ["image/svg+xml", "image/png", "image/jpeg"],
+    errorMessage: "File type not supported (.svg., .png, or .jpg only)",
+  },
+  programResourceFiles: {
+    types: [...documentTypes, "application/zip"],
+    errorMessage: "File type not supported (document or zip files only)",
+  },
 };
 
 const imageUploadVariants = cva(
-  "group relative isolate flex aspect-[1200/630] w-full flex-col items-center justify-center overflow-hidden bg-white transition-all hover:bg-gray-50",
+  "group relative isolate flex aspect-[1200/630] w-full flex-col items-center justify-center overflow-hidden bg-white transition-all hover:bg-neutral-50",
   {
     variants: {
       variant: {
-        default: "rounded-md border border-gray-300 shadow-sm",
+        default: "rounded-md border border-neutral-300 shadow-sm",
         plain: "",
       },
     },
@@ -48,11 +83,18 @@ type FileUploadReadFileProps =
     };
 
 export type FileUploadProps = FileUploadReadFileProps & {
-  accept: keyof typeof acceptFileTypes;
-
+  id?: string;
+  accept: AcceptedFileFormats;
   className?: string;
   iconClassName?: string;
+  previewClassName?: string;
 
+  icon?: Icon;
+
+  /**
+   * Custom preview component to display instead of the default
+   */
+  customPreview?: ReactNode;
   /**
    * Image to display (generally for image uploads)
    */
@@ -92,14 +134,20 @@ export type FileUploadProps = FileUploadReadFileProps & {
    * Accessibility label for screen readers
    */
   accessibilityLabel?: string;
+
+  disabled?: boolean;
 } & VariantProps<typeof imageUploadVariants>;
 
 export function FileUpload({
+  id,
   readFile,
   onChange,
   variant,
   className,
   iconClassName,
+  previewClassName,
+  icon: Icon = CloudUpload,
+  customPreview,
   accept = "any",
   imageSrc,
   loading = false,
@@ -107,7 +155,9 @@ export function FileUpload({
   showHoverOverlay = true,
   content,
   maxFileSizeMB = 0,
+  targetResolution,
   accessibilityLabel = "File upload",
+  disabled = false,
 }: FileUploadProps) {
   const [dragActive, setDragActive] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -137,23 +187,39 @@ export function FileUpload({
       return;
     }
 
+    let fileToUse = file;
+
+    // Add image resizing logic
+    if (targetResolution && file.type.startsWith("image/")) {
+      try {
+        const resizedFile = await resizeImage(file, targetResolution);
+        const blob = await fetch(resizedFile).then((r) => r.blob());
+        fileToUse = new File([blob], file.name, { type: file.type });
+      } catch (error) {
+        console.error("Error resizing image:", error);
+        // Fallback to original file if resize fails
+      }
+    }
+
+    // File reading logic
     if (readFile) {
       const reader = new FileReader();
       reader.onload = (e) =>
-        onChange?.({ src: e.target?.result as string, file });
-      reader.readAsDataURL(file);
-
+        onChange?.({ src: e.target?.result as string, file: fileToUse });
+      reader.readAsDataURL(fileToUse);
       return;
     }
 
-    onChange?.({ file });
+    onChange?.({ file: fileToUse });
   };
 
   return (
     <label
       className={cn(
         imageUploadVariants({ variant }),
-        clickToUpload && "cursor-pointer",
+        !disabled
+          ? cn(clickToUpload && "cursor-pointer")
+          : "cursor-not-allowed",
         className,
       )}
     >
@@ -188,23 +254,38 @@ export function FileUpload({
       />
       <div
         className={cn(
-          "absolute inset-0 z-[3] flex flex-col items-center justify-center rounded-[inherit] bg-white transition-all",
+          "absolute inset-0 z-[3] flex flex-col items-center justify-center rounded-[inherit] border-2 border-transparent bg-white transition-all",
+          disabled && "bg-neutral-50",
           dragActive &&
-            "cursor-copy border-2 border-black bg-gray-50 opacity-100",
+            !disabled &&
+            "cursor-copy border-black bg-neutral-50 opacity-100",
           imageSrc
-            ? cn("opacity-0", showHoverOverlay && "group-hover:opacity-100")
-            : "group-hover:bg-gray-50",
+            ? cn(
+                "opacity-0",
+                showHoverOverlay && !disabled && "group-hover:opacity-100",
+              )
+            : cn(!disabled && "group-hover:bg-neutral-50"),
         )}
       >
-        <UploadCloud
+        <Icon
           className={cn(
-            "h-7 w-7 text-gray-500 transition-all duration-75 group-hover:scale-110 group-active:scale-95",
-            dragActive ? "scale-110" : "scale-100",
+            "size-7 transition-all duration-75",
+            !disabled
+              ? cn(
+                  "text-neutral-500 group-hover:scale-110 group-active:scale-95",
+                  dragActive ? "scale-110" : "scale-100",
+                )
+              : "text-neutral-400",
             iconClassName,
           )}
         />
         {content !== null && (
-          <div className="mt-2 text-center text-sm text-gray-500">
+          <div
+            className={cn(
+              "mt-2 text-center text-sm text-neutral-500",
+              disabled && "text-neutral-400",
+            )}
+          >
             {content ?? (
               <>
                 <p>Drag and drop {clickToUpload && "or click"} to upload.</p>
@@ -214,20 +295,26 @@ export function FileUpload({
         )}
         <span className="sr-only">{accessibilityLabel}</span>
       </div>
-      {imageSrc && (
-        <img
-          src={imageSrc}
-          alt="Preview"
-          className="h-full w-full rounded-[inherit] object-cover"
-        />
-      )}
+      {imageSrc &&
+        (customPreview ?? (
+          <img
+            src={imageSrc}
+            alt="Preview"
+            className={cn(
+              "h-full w-full rounded-[inherit] object-cover",
+              previewClassName,
+            )}
+          />
+        ))}
       {clickToUpload && (
         <div className="sr-only mt-1 flex shadow-sm">
           <input
+            id={id}
             key={fileName} // Gets us a fresh input every time a file is uploaded
             type="file"
             accept={acceptFileTypes[accept].types.join(",")}
             onChange={onFileChange}
+            disabled={disabled}
           />
         </div>
       )}

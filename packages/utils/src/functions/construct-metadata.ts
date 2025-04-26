@@ -1,49 +1,62 @@
 import { Metadata } from "next";
-import { HOME_DOMAIN } from "../constants";
 
 export function constructMetadata({
-  title = `${process.env.NEXT_PUBLIC_APP_NAME} - Link Management for Modern Marketing Teams`,
-  description = `${process.env.NEXT_PUBLIC_APP_NAME} is the open-source link management infrastructure for modern marketing teams to create, share, and track short links.`,
+  title,
+  fullTitle,
+  description = "Dub.co is the open-source link management platform for modern marketing teams to create marketing campaigns, link sharing features, and referral programs.",
   image = "https://assets.dub.co/thumbnail.jpg",
+  video,
   icons = [
     {
       rel: "apple-touch-icon",
       sizes: "32x32",
-      url: "/apple-touch-icon.png",
+      url: "https://assets.dub.co/favicons/apple-touch-icon.png",
     },
     {
       rel: "icon",
       type: "image/png",
       sizes: "32x32",
-      url: "/favicon-32x32.png",
+      url: "https://assets.dub.co/favicons/favicon-32x32.png",
     },
     {
       rel: "icon",
       type: "image/png",
       sizes: "16x16",
-      url: "/favicon-16x16.png",
+      url: "https://assets.dub.co/favicons/favicon-16x16.png",
     },
   ],
+  url,
+  canonicalUrl,
   noIndex = false,
+  manifest,
 }: {
   title?: string;
+  fullTitle?: string;
   description?: string;
   image?: string | null;
+  video?: string | null;
   icons?: Metadata["icons"];
+  url?: string;
+  canonicalUrl?: string;
   noIndex?: boolean;
+  manifest?: string | URL | null;
 } = {}): Metadata {
   return {
-    title,
+    title:
+      fullTitle ||
+      (title
+        ? `${title} | Dub.co`
+        : "Dub.co - Link Management for Modern Marketing Teams"),
     description,
     openGraph: {
       title,
       description,
       ...(image && {
-        images: [
-          {
-            url: image,
-          },
-        ],
+        images: image,
+      }),
+      url,
+      ...(video && {
+        videos: video,
       }),
     },
     twitter: {
@@ -53,15 +66,26 @@ export function constructMetadata({
         card: "summary_large_image",
         images: [image],
       }),
+      ...(video && {
+        player: video,
+      }),
       creator: "@dubdotco",
     },
     icons,
-    metadataBase: new URL(HOME_DOMAIN),
+    metadataBase: new URL("https://dub.co"),
+    ...((url || canonicalUrl) && {
+      alternates: {
+        canonical: url || canonicalUrl,
+      },
+    }),
     ...(noIndex && {
       robots: {
         index: false,
         follow: false,
       },
+    }),
+    ...(manifest && {
+      manifest,
     }),
   };
 }

@@ -1,135 +1,236 @@
-import { prisma } from "@/lib/prisma";
-import { recordLink } from "@/lib/tinybird";
-import { LinkProps, ProcessedLinkProps, RedisLinkProps } from "@/lib/types";
-import { formatRedisLink, redis } from "@/lib/upstash";
-import { getParamsFromURL, truncate } from "@dub/utils";
+import { ProcessedLinkProps } from "@/lib/types";
+import { prisma } from "@dub/prisma";
+import { getParamsFromURL, linkConstructorSimple, truncate } from "@dub/utils";
+import { Prisma } from "@prisma/client";
+import { waitUntil } from "@vercel/functions";
+import { createId } from "../create-id";
+import { combineTagIds } from "../tags/combine-tag-ids";
+import { encodeKeyIfCaseSensitive } from "./case-sensitivity";
+import { includeTags } from "./include-tags";
+import { propagateBulkLinkChanges } from "./propagate-bulk-link-changes";
 import { updateLinksUsage } from "./update-links-usage";
-import { combineTagIds, transformLink } from "./utils";
+import {
+  checkIfLinksHaveTags,
+  checkIfLinksHaveWebhooks,
+  transformLink,
+} from "./utils";
 
 export async function bulkCreateLinks({
   links,
+  skipRedisCache = false,
 }: {
   links: ProcessedLinkProps[];
+  skipRedisCache?: boolean;
 }) {
   if (links.length === 0) return [];
 
-  // create links via Promise.all (because Prisma doesn't support nested createMany)
-  // ref: https://github.com/prisma/prisma/issues/8131#issuecomment-997667070
-  const createdLinks = await Promise.all(
-    links.map(({ tagId, tagIds, tagNames, ...link }) => {
+  const hasTags = checkIfLinksHaveTags(links);
+  const hasWebhooks = checkIfLinksHaveWebhooks(links);
+
+  // Create a map of shortLinks to their original indices at the start
+  const shortLinkToIndexMap = new Map(
+    links.map((link, index) => {
+      const key = encodeKeyIfCaseSensitive({
+        domain: link.domain,
+        key: link.key,
+      });
+
+      return [
+        linkConstructorSimple({
+          domain: link.domain,
+          key,
+        }),
+        index,
+      ];
+    }),
+  );
+
+  // Create all links first using createMany
+  await prisma.link.createMany({
+    data: links.map(({ tagId, tagIds, tagNames, webhookIds, ...link }) => {
       const { utm_source, utm_medium, utm_campaign, utm_term, utm_content } =
         getParamsFromURL(link.url);
 
-      const combinedTagIds = combineTagIds({ tagId, tagIds });
-
-      return prisma.link.create({
-        data: {
-          ...link,
-          title: truncate(link.title, 120),
-          description: truncate(link.description, 240),
-          utm_source,
-          utm_medium,
-          utm_campaign,
-          utm_term,
-          utm_content,
-          expiresAt: link.expiresAt ? new Date(link.expiresAt) : null,
-          geo: link.geo || undefined,
-
-          // Associate tags by tagNames
-          ...(tagNames?.length &&
-            link.projectId && {
-              tags: {
-                create: tagNames.filter(Boolean).map((tagName) => ({
-                  tag: {
-                    connect: {
-                      name_projectId: {
-                        name: tagName,
-                        projectId: link.projectId as string,
-                      },
-                    },
-                  },
-                })),
-              },
-            }),
-
-          // Associate tags by IDs (takes priority over tagNames)
-          ...(combinedTagIds &&
-            combinedTagIds.length > 0 && {
-              tags: {
-                createMany: {
-                  data: combinedTagIds
-                    .filter(Boolean)
-                    .map((tagId) => ({ tagId })),
-                },
-              },
-            }),
-        },
-        include: {
-          tags: {
-            select: {
-              tagId: true,
-              tag: {
-                select: {
-                  id: true,
-                  name: true,
-                  color: true,
-                },
-              },
-            },
-          },
-        },
-      });
-    }),
-  );
-
-  await propagateBulkLinkChanges(createdLinks);
-
-  return createdLinks.map((link) => transformLink(link));
-}
-
-export async function propagateBulkLinkChanges(
-  links: (LinkProps & { tags: { tagId: string }[] })[],
-) {
-  const pipeline = redis.pipeline();
-
-  // split links into domains for better write effeciency in Redis
-  const linksByDomain: Record<string, Record<string, RedisLinkProps>> = {};
-
-  await Promise.all(
-    links.map(async (link) => {
-      const { domain, key } = link;
-
-      if (!linksByDomain[domain]) {
-        linksByDomain[domain] = {};
-      }
-      // this technically will be a synchronous function since isIframeable won't be run for bulk link creation
-      const formattedLink = await formatRedisLink(link);
-      linksByDomain[domain][key.toLowerCase()] = formattedLink;
-    }),
-  );
-
-  Object.entries(linksByDomain).forEach(([domain, links]) => {
-    pipeline.hset(domain.toLowerCase(), links);
-  });
-
-  await Promise.all([
-    // update Redis
-    pipeline.exec(),
-    // update Tinybird
-    recordLink(
-      links.map((link) => ({
-        link_id: link.id,
+      link.key = encodeKeyIfCaseSensitive({
         domain: link.domain,
         key: link.key,
-        url: link.url,
-        tag_ids: link.tags.map((tag) => tag.tagId),
-        workspace_id: link.projectId,
-        created_at: link.createdAt,
-      })),
-    ),
-    updateLinksUsage({
-      workspaceId: links[0].projectId!, // this will always be present
-      increment: links.length,
+      });
+
+      return {
+        ...link,
+        id: createId({ prefix: "link_" }),
+        shortLink: linkConstructorSimple({
+          domain: link.domain,
+          key: link.key,
+        }),
+        title: truncate(link.title, 120),
+        description: truncate(link.description, 240),
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_term,
+        utm_content,
+        expiresAt: link.expiresAt ? new Date(link.expiresAt) : null,
+        geo: link.geo || undefined,
+        testVariants: link.testVariants || Prisma.JsonNull,
+      };
     }),
-  ]);
+    skipDuplicates: true,
+  });
+
+  // Fetch the created links to get their IDs
+  let createdLinksData = await prisma.link.findMany({
+    where: {
+      shortLink: {
+        in: Array.from(shortLinkToIndexMap.keys()),
+      },
+    },
+  });
+
+  if (hasTags || hasWebhooks) {
+    // Create tags and webhooks in parallel if needed
+    const createRelationsPromises: Promise<any>[] = [];
+
+    if (hasTags) {
+      const linkTagsToCreate: {
+        linkId: string;
+        tagId: string;
+        createdAt: Date;
+      }[] = [];
+
+      let tagNameToIdMap: Record<string, string> = {};
+
+      if (links.some((link) => link.tagNames?.length)) {
+        const allTagNames = [
+          ...new Set(links.flatMap((link) => link.tagNames).filter(Boolean)),
+        ] as string[];
+
+        const allTagIds = await prisma.tag.findMany({
+          where: {
+            projectId: links[0].projectId!,
+            name: {
+              in: allTagNames,
+            },
+          },
+        });
+
+        tagNameToIdMap = allTagIds.reduce(
+          (acc, tag) => {
+            acc[tag.name.toLowerCase()] = tag.id;
+            return acc;
+          },
+          {} as Record<string, string>,
+        );
+      }
+
+      createdLinksData.forEach((link, idx) => {
+        const originalLink = links[idx];
+        if (!originalLink) return;
+
+        const { tagId, tagIds, tagNames } = originalLink;
+        const combinedTagIds = combineTagIds({ tagId, tagIds });
+
+        // Handle tag creation by IDs
+        if (combinedTagIds && combinedTagIds.length > 0) {
+          combinedTagIds.filter(Boolean).forEach((tagId, tagIdx) => {
+            linkTagsToCreate.push({
+              linkId: link.id,
+              tagId,
+              createdAt: new Date(new Date().getTime() + tagIdx * 100),
+            });
+          });
+        }
+
+        if (tagNames && tagNames.length > 0) {
+          tagNames.filter(Boolean).forEach((tagName, tagIdx) => {
+            linkTagsToCreate.push({
+              linkId: link.id,
+              tagId: tagNameToIdMap[tagName.toLowerCase()],
+              createdAt: new Date(new Date().getTime() + tagIdx * 100),
+            });
+          });
+        }
+      });
+
+      if (linkTagsToCreate.length > 0) {
+        createRelationsPromises.push(
+          prisma.linkTag.createMany({
+            data: linkTagsToCreate,
+            skipDuplicates: true,
+          }),
+        );
+      }
+    }
+
+    if (hasWebhooks) {
+      const linkWebhooksToCreate: { linkId: string; webhookId: string }[] = [];
+
+      createdLinksData.forEach((link, idx) => {
+        const originalLink = links[idx];
+        if (!originalLink?.webhookIds?.length) return;
+
+        originalLink.webhookIds.forEach((webhookId) => {
+          linkWebhooksToCreate.push({
+            linkId: link.id,
+            webhookId,
+          });
+        });
+      });
+
+      if (linkWebhooksToCreate.length > 0) {
+        createRelationsPromises.push(
+          prisma.linkWebhook.createMany({
+            data: linkWebhooksToCreate,
+            skipDuplicates: true,
+          }),
+        );
+      }
+    }
+
+    // Wait for all relations to be created
+    if (createRelationsPromises.length > 0) {
+      await Promise.all(createRelationsPromises);
+    }
+
+    // Refetch the links with their relations to return the complete data
+    createdLinksData = await prisma.link.findMany({
+      where: {
+        id: {
+          in: createdLinksData.map((link) => link.id),
+        },
+      },
+      include: {
+        ...includeTags,
+        webhooks: hasWebhooks
+          ? {
+              select: {
+                webhookId: true,
+              },
+            }
+          : false,
+      },
+    });
+  }
+
+  waitUntil(
+    Promise.all([
+      propagateBulkLinkChanges({
+        links: createdLinksData,
+        skipRedisCache,
+      }),
+      updateLinksUsage({
+        workspaceId: links[0].projectId!, // this will always be present
+        increment: links.length,
+      }),
+    ]),
+  );
+
+  // Simplified sorting using the map
+  createdLinksData = createdLinksData.sort((a, b) => {
+    const aIndex = shortLinkToIndexMap.get(a.shortLink) ?? -1;
+    const bIndex = shortLinkToIndexMap.get(b.shortLink) ?? -1;
+    return aIndex - bIndex;
+  });
+
+  return createdLinksData.map((link) => transformLink(link));
 }

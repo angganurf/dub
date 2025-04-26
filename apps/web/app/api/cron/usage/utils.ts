@@ -2,17 +2,17 @@ import { getAnalytics } from "@/lib/analytics/get-analytics";
 import { qstash } from "@/lib/cron";
 import { limiter } from "@/lib/cron/limiter";
 import { sendLimitEmail } from "@/lib/cron/send-limit-email";
-import { prisma } from "@/lib/prisma";
 import { WorkspaceProps } from "@/lib/types";
+import { sendEmail } from "@dub/email";
+import { ClicksSummary } from "@dub/email/templates/clicks-summary";
+import { prisma } from "@dub/prisma";
 import {
   APP_DOMAIN_WITH_NGROK,
   capitalize,
   getAdjustedBillingCycleStart,
-  linkConstructor,
+  getPrettyUrl,
   log,
 } from "@dub/utils";
-import { sendEmail } from "emails";
-import ClicksSummary from "emails/clicks-summary";
 
 const limit = 100;
 
@@ -28,6 +28,14 @@ export const updateUsage = async () => {
       users: {
         select: {
           user: true,
+        },
+        where: {
+          user: {
+            isMachine: false,
+          },
+          notificationPreference: {
+            linkUsageSummary: true,
+          },
         },
         orderBy: {
           createdAt: "asc",
@@ -84,6 +92,7 @@ export const updateUsage = async () => {
             usage: 0,
           }),
           linksUsage: 0,
+          salesUsage: 0,
           aiUsage: 0,
           sentEmails: {
             deleteMany: {
@@ -114,39 +123,37 @@ export const updateUsage = async () => {
           event: "clicks",
           groupBy: "top_links",
           interval: "30d",
-        }).then(async (data) => {
-          const topFive = data.slice(0, 5);
-          return await Promise.all(
-            topFive.map(
-              async ({
-                link: linkId,
-                clicks,
-              }: {
-                link: string;
-                clicks: number;
-              }) => {
-                const link = await prisma.link.findUnique({
-                  where: {
-                    id: linkId,
-                  },
-                  select: {
-                    domain: true,
-                    key: true,
-                  },
-                });
-                if (!link) return;
-                return {
-                  link: linkConstructor({
-                    domain: link.domain,
-                    key: link.key,
-                    pretty: true,
-                  }),
-                  clicks,
-                };
-              },
-            ),
-          );
+          root: false,
         });
+
+        const topFive = topLinks.slice(0, 5);
+        const topFiveLinkIds = topFive.map(({ link }) => link);
+
+        const linksMetadata = await prisma.link.findMany({
+          where: {
+            projectId: workspace.id,
+            id: {
+              in: topFiveLinkIds,
+            },
+          },
+          select: {
+            id: true,
+            shortLink: true,
+          },
+        });
+
+        const topFiveLinks = topFive.map((d) => ({
+          link:
+            getPrettyUrl(
+              linksMetadata.find((l) => l.id === d.link)?.shortLink,
+            ) || d.link,
+          clicks: d.clicks,
+        }));
+
+        const totalClicks = topLinks.reduce(
+          (acc, curr) => acc + curr.clicks,
+          0,
+        );
 
         const emails = workspace.users.map(
           (user) => user.user.email,
@@ -160,14 +167,13 @@ export const updateUsage = async () => {
                 email,
                 react: ClicksSummary({
                   email,
-                  appName: process.env.NEXT_PUBLIC_APP_NAME as string,
-                  appDomain: process.env.NEXT_PUBLIC_APP_DOMAIN as string,
                   workspaceName: workspace.name,
                   workspaceSlug: workspace.slug,
-                  totalClicks: workspace.usage,
+                  totalClicks,
                   createdLinks: workspace.linksUsage,
-                  topLinks,
+                  topLinks: topFiveLinks,
                 }),
+                variant: "notifications",
               }),
             );
           }),

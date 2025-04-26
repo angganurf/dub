@@ -33,10 +33,6 @@ export const validDomainRegex = new RegExp(
   /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/,
 );
 
-export const validKeyRegex = new RegExp(
-  /^[0-9A-Za-z\u0080-\uFFFF\/\-\p{Emoji}]*$/u,
-);
-
 export const validSlugRegex = new RegExp(/^[a-zA-Z0-9\-]+$/);
 
 export const getSubdomain = (name: string, apexName: string) => {
@@ -54,8 +50,6 @@ export const getApexDomain = (url: string) => {
     return "";
   }
   if (domain === "youtu.be") return "youtube.com";
-  if (domain === "raw.githubusercontent.com") return "github.com";
-  if (domain.endsWith(".vercel.app")) return "vercel.app";
 
   const parts = domain.split(".");
   if (parts.length > 2) {

@@ -1,6 +1,8 @@
+import { useWorkspacePreferences } from "@/lib/swr/use-workspace-preferences";
 import { LinkLogo, useRouterStuff } from "@dub/ui";
+import { Globe, Hyperlink } from "@dub/ui/icons";
 import { getApexDomain } from "@dub/utils";
-import { useContext, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import { AnalyticsCard } from "./analytics-card";
 import { AnalyticsLoadingSpinner } from "./analytics-loading-spinner";
 import { AnalyticsContext } from "./analytics-provider";
@@ -8,68 +10,86 @@ import BarList from "./bar-list";
 import { useAnalyticsFilterOption } from "./utils";
 
 export default function TopLinks() {
-  const { queryParams } = useRouterStuff();
+  const { queryParams, searchParams } = useRouterStuff();
 
-  const [selectedTabId, setSelectedTabId] = useState<"links" | "domains">(
-    "links",
-  );
-  const { domain, key } = useContext(AnalyticsContext);
-  const showUrls = domain && key;
+  const { selectedTab, saleUnit } = useContext(AnalyticsContext);
+  const dataKey = selectedTab === "sales" ? saleUnit : "count";
 
-  const data = useAnalyticsFilterOption({
-    groupBy: `top_${showUrls ? "urls" : "links"}`,
-    root: selectedTabId === "domains" ? "true" : "false",
+  const [tab, setTab] = useState<"links" | "urls">("links");
+  const { data } = useAnalyticsFilterOption({
+    groupBy: `top_${tab}`,
   });
+
+  const [persisted] = useWorkspacePreferences("linksDisplay");
+
+  const shortLinkTitle = useCallback(
+    (d: { url?: string; title?: string; shortLink?: string }) => {
+      if (tab === "urls") {
+        return d.url || "Unknown";
+      }
+
+      const displayProperties = persisted?.displayProperties;
+
+      if (displayProperties?.includes("title") && d.title) {
+        return d.title;
+      }
+
+      return d.shortLink || "Unknown";
+    },
+    [persisted, tab],
+  );
 
   return (
     <AnalyticsCard
-      tabs={
-        showUrls
-          ? [{ id: "urls", label: "URLs" }]
-          : [
-              { id: "links", label: "Links" },
-              { id: "domains", label: "Domains" },
-            ]
-      }
+      tabs={[
+        { id: "links", label: "Short Links", icon: Hyperlink },
+        { id: "urls", label: "Destination URLs", icon: Globe },
+      ]}
       expandLimit={8}
       hasMore={(data?.length ?? 0) > 8}
-      selectedTabId={showUrls ? "urls" : selectedTabId}
-      onSelectTab={(tabId: "links" | "domains") =>
-        showUrls ? null : setSelectedTabId(tabId)
-      }
+      selectedTabId={tab}
+      onSelectTab={setTab}
     >
       {({ limit, setShowModal }) =>
         data ? (
           data.length > 0 ? (
             <BarList
-              tab={showUrls ? "url" : "link"}
+              tab={tab}
               data={
-                data?.map((d) => ({
-                  icon: (
-                    <LinkLogo
-                      apexDomain={getApexDomain(d.url)}
-                      className="h-5 w-5 sm:h-5 sm:w-5"
-                    />
-                  ),
-                  title:
-                    !showUrls && d["shortLink"]
-                      ? d["shortLink"].replace(/^https?:\/\//, "")
-                      : d.url,
-                  href: queryParams({
-                    set: {
-                      ...(!showUrls
-                        ? { domain: d.domain, key: d.key || "_root" }
+                data
+                  ?.map((d) => ({
+                    icon: (
+                      <LinkLogo
+                        apexDomain={getApexDomain(d.url)}
+                        className="size-5 sm:size-5"
+                      />
+                    ),
+                    title: shortLinkTitle(d as any),
+                    // TODO: simplify this once we switch from domain+key to linkId
+                    href: queryParams({
+                      ...((tab === "links" &&
+                        searchParams.has("domain") &&
+                        searchParams.has("key")) ||
+                      (tab === "urls" && searchParams.has("url"))
+                        ? { del: tab === "links" ? ["domain", "key"] : "url" }
                         : {
-                            url: d.url,
+                            set: {
+                              ...(tab === "links"
+                                ? { domain: d.domain, key: d.key || "_root" }
+                                : {
+                                    url: d.url,
+                                  }),
+                            },
                           }),
-                    },
-                    getNewPath: true,
-                  }) as string,
-                  value: d.count || 0,
-                  ...(!showUrls && { linkData: d }),
-                })) || []
+                      getNewPath: true,
+                    }) as string,
+                    value: d[dataKey] || 0,
+                    ...(tab === "links" && { linkData: d }),
+                  }))
+                  ?.sort((a, b) => b.value - a.value) || []
               }
-              maxValue={(data && data[0]?.count) || 0}
+              unit={selectedTab}
+              maxValue={Math.max(...data?.map((d) => d[dataKey] ?? 0)) ?? 0}
               barBackground="bg-orange-100"
               hoverBackground="hover:bg-gradient-to-r hover:from-orange-50 hover:to-transparent hover:border-orange-500"
               setShowModal={setShowModal}
@@ -77,11 +97,11 @@ export default function TopLinks() {
             />
           ) : (
             <div className="flex h-[300px] items-center justify-center">
-              <p className="text-sm text-gray-600">No data available</p>
+              <p className="text-sm text-neutral-600">No data available</p>
             </div>
           )
         ) : (
-          <div className="flex h-[300px] items-center justify-center">
+          <div className="absolute inset-0 flex h-[300px] w-full items-center justify-center bg-white/50">
             <AnalyticsLoadingSpinner />
           </div>
         )

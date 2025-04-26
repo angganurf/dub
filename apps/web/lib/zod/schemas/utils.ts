@@ -6,6 +6,28 @@ export const parseUrlSchema = z
   .transform((v) => getUrlFromString(v))
   .refine((v) => isValidUrl(v), { message: "Invalid URL" });
 
+export const parseUrlSchemaAllowEmpty = ({
+  maxLength,
+  trim = false,
+}: {
+  maxLength?: number;
+  trim?: boolean;
+} = {}) => {
+  let schema = z.string();
+
+  if (trim) {
+    schema = schema.trim();
+  }
+
+  if (maxLength) {
+    schema = schema.max(maxLength, {
+      message: `Must be ${maxLength} or fewer characters long`,
+    });
+  }
+
+  return schema.transform((v) => getUrlFromString(v));
+};
+
 export const parseDateSchema = z
   .string()
   .transform((v) => parseDateTime(v))

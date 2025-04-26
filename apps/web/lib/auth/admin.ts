@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@dub/prisma";
 import { DUB_WORKSPACE_ID, getSearchParams } from "@dub/utils";
 import { getSession } from "./utils";
 
@@ -15,6 +15,21 @@ interface WithAdminHandler {
   }): Promise<Response>;
 }
 
+export const isDubAdmin = async (userId: string) => {
+  const response = await prisma.projectUsers.findUnique({
+    where: {
+      userId_projectId: {
+        userId,
+        projectId: DUB_WORKSPACE_ID,
+      },
+    },
+  });
+  if (!response) {
+    return false;
+  }
+  return true;
+};
+
 export const withAdmin =
   (handler: WithAdminHandler) =>
   async (
@@ -26,15 +41,8 @@ export const withAdmin =
       return new Response("Unauthorized: Login required.", { status: 401 });
     }
 
-    const response = await prisma.projectUsers.findUnique({
-      where: {
-        userId_projectId: {
-          userId: session.user.id,
-          projectId: DUB_WORKSPACE_ID,
-        },
-      },
-    });
-    if (!response) {
+    const isAdminUser = await isDubAdmin(session.user.id);
+    if (!isAdminUser) {
       return new Response("Unauthorized: Not an admin.", { status: 401 });
     }
 

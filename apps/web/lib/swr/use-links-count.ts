@@ -2,14 +2,23 @@ import { useRouterStuff } from "@dub/ui";
 import { fetcher } from "@dub/utils";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
+import z from "../zod";
+import { getLinksCountQuerySchema } from "../zod/schemas/links";
+import { useIsMegaFolder } from "./use-is-mega-folder";
 import useWorkspace from "./use-workspace";
 
-export default function useLinksCount({
-  groupBy,
+const partialQuerySchema = getLinksCountQuerySchema.partial();
+
+export default function useLinksCount<T = any>({
+  query,
+  ignoreParams,
+  enabled = true,
 }: {
-  groupBy?: "domain" | "tagId";
+  query?: z.infer<typeof partialQuerySchema>;
+  ignoreParams?: boolean;
+  enabled?: boolean;
 } = {}) {
-  const { id } = useWorkspace();
+  const { id: workspaceId } = useWorkspace();
   const { getQueryString } = useRouterStuff();
 
   const [admin, setAdmin] = useState(false);
@@ -18,33 +27,36 @@ export default function useLinksCount({
       setAdmin(true);
     }
   }, []);
+  const { isMegaFolder } = useIsMegaFolder();
 
   const { data, error } = useSWR<any>(
-    id
+    workspaceId && !isMegaFolder && enabled
       ? `/api/links/count${getQueryString(
           {
-            workspaceId: id,
-            ...(groupBy && { groupBy }),
+            workspaceId,
+            ...query,
           },
-          {
-            ignore: ["import", "upgrade", "newLink"],
-          },
+          ignoreParams
+            ? { include: [] }
+            : {
+                exclude: ["import", "upgrade", "newLink"],
+              },
         )}`
       : admin
         ? `/api/admin/links/count${getQueryString({
-            ...(groupBy && { groupBy }),
+            ...query,
           })}`
         : null,
     fetcher,
     {
-      dedupingInterval: 30000,
+      dedupingInterval: 60000,
       keepPreviousData: true,
     },
   );
 
   return {
-    data,
-    loading: !error && !data,
+    data: data as T,
+    loading: !error && data === undefined,
     error,
   };
 }

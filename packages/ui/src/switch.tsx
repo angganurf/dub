@@ -2,47 +2,47 @@
 
 import { cn } from "@dub/utils";
 import * as SwitchPrimitive from "@radix-ui/react-switch";
-import { Dispatch, ReactNode, SetStateAction } from "react";
+import { Dispatch, ReactNode, SetStateAction, useMemo } from "react";
 import { Tooltip } from "./tooltip";
 
 export function Switch({
   fn,
+  id,
   trackDimensions,
   thumbDimensions,
   thumbTranslate,
+  thumbIcon,
   checked = true,
   loading = false,
   disabled = false,
   disabledTooltip,
 }: {
   fn?: Dispatch<SetStateAction<boolean>> | ((checked: boolean) => void);
+  id?: string;
   trackDimensions?: string;
   thumbDimensions?: string;
   thumbTranslate?: string;
+  thumbIcon?: ReactNode;
   checked?: boolean;
   loading?: boolean;
   disabled?: boolean;
   disabledTooltip?: string | ReactNode;
 }) {
-  if (disabledTooltip) {
-    return (
-      <Tooltip content={disabledTooltip}>
-        <div className="radix-state-checked:bg-gray-300 relative inline-flex h-4 w-8 flex-shrink-0 cursor-not-allowed rounded-full border-2 border-transparent bg-gray-200">
-          <div className="h-3 w-3 transform rounded-full bg-white shadow-lg" />
-        </div>
-      </Tooltip>
-    );
-  }
+  const switchDisabled = useMemo(() => {
+    return disabledTooltip ? true : disabled || loading;
+  }, [disabledTooltip, disabled, loading]);
 
-  return (
+  const switchRoot = (
     <SwitchPrimitive.Root
       checked={loading ? false : checked}
       name="switch"
+      id={id}
       {...(fn && { onCheckedChange: fn })}
-      disabled={disabled || loading}
+      disabled={switchDisabled}
       className={cn(
-        "radix-state-checked:bg-blue-500 radix-state-unchecked:bg-gray-200 relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring focus-visible:ring-blue-500 focus-visible:ring-opacity-75",
-        (disabled || loading) && "cursor-not-allowed",
+        "radix-state-checked:bg-blue-500 radix-state-unchecked:bg-neutral-200 relative inline-flex h-4 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out",
+        "focus:outline-none focus-visible:ring focus-visible:ring-blue-500 focus-visible:ring-opacity-75",
+        "data-[disabled]:cursor-not-allowed",
         trackDimensions,
       )}
     >
@@ -54,7 +54,19 @@ export function Switch({
           thumbDimensions,
           thumbTranslate,
         )}
-      />
+      >
+        {thumbIcon}
+      </SwitchPrimitive.Thumb>
     </SwitchPrimitive.Root>
   );
+
+  if (disabledTooltip) {
+    return (
+      <Tooltip content={disabledTooltip}>
+        <div className="inline-block leading-none">{switchRoot}</div>
+      </Tooltip>
+    );
+  }
+
+  return switchRoot;
 }

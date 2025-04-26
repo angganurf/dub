@@ -1,21 +1,31 @@
-import { NextRequest } from "next/server";
+import { ipAddress } from "@vercel/functions";
+import { userAgent } from "next/server";
+import { IP_BOTS, UA_BOTS } from "./bots-list";
 
-export const detectBot = (req: NextRequest) => {
-  const url = req.nextUrl;
-  if (url.searchParams.get("bot")) return true;
-  const ua = req.headers.get("User-Agent");
-  if (ua) {
-    /* Note:
-     * - bot is for most bots & crawlers
-     * - ChatGPT is for ChatGPT
-     * - facebookexternalhit is for Facebook crawler
-     * - WhatsApp is for WhatsApp crawler
-     * - MetaInspector is for https://metatags.io/
-     * - Go-http-client/1.1 is a bot: https://user-agents.net/string/go-http-client-1-1
-     */
-    return /bot|chatgpt|facebookexternalhit|WhatsApp|google|baidu|bing|msn|duckduckbot|teoma|slurp|yandex|MetaInspector|Go-http-client/i.test(
-      ua,
-    );
+export const detectBot = (req: Request) => {
+  const searchParams = new URL(req.url).searchParams;
+
+  if (searchParams.get("bot")) {
+    return true;
   }
-  return false;
+
+  // Check ua
+  const ua = userAgent(req);
+
+  if (ua) {
+    return ua.isBot || UA_BOTS.some((bot) => new RegExp(bot, "i").test(ua.ua));
+  }
+
+  // Check ip
+  let ip = ipAddress(req);
+
+  if (!ip) {
+    return false;
+  }
+
+  if (ip.includes("/")) {
+    ip = ip.split("/")[0];
+  }
+
+  return IP_BOTS.includes(ip);
 };

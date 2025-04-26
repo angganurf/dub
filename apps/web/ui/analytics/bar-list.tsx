@@ -1,17 +1,30 @@
 "use client";
 
 import { LinkProps } from "@/lib/types";
-import { NumberTooltip, Tooltip, useMediaQuery } from "@dub/ui";
-import { LinkifyTooltipContent } from "@dub/ui/src/tooltip";
-import { cn, nFormatter, truncate } from "@dub/utils";
+import { LinkifyTooltipContent, Tooltip, useMediaQuery } from "@dub/ui";
+import { cn, getPrettyUrl } from "@dub/utils";
+import NumberFlow, { NumberFlowGroup } from "@number-flow/react";
 import { motion } from "framer-motion";
 import { Search } from "lucide-react";
 import Link from "next/link";
-import { Dispatch, ReactNode, SetStateAction, useMemo, useState } from "react";
+import {
+  ComponentProps,
+  Dispatch,
+  memo,
+  ReactNode,
+  SetStateAction,
+  useContext,
+  useMemo,
+  useState,
+} from "react";
+import AutoSizer from "react-virtualized-auto-sizer";
+import { areEqual, FixedSizeList } from "react-window";
+import { AnalyticsContext } from "./analytics-provider";
 import LinkPreviewTooltip from "./link-preview";
 
 export default function BarList({
   tab,
+  unit,
   data,
   barBackground,
   hoverBackground,
@@ -20,10 +33,11 @@ export default function BarList({
   limit,
 }: {
   tab: string;
+  unit: string;
   data: {
     icon: ReactNode;
     title: string;
-    href: string;
+    href?: string;
     value: number;
     linkId?: string;
   }[];
@@ -35,8 +49,13 @@ export default function BarList({
 }) {
   const [search, setSearch] = useState("");
 
+  // Calculate total sum for percentage calculations
+  const totalSum = useMemo(
+    () => data.reduce((sum, item) => sum + item.value, 0),
+    [data],
+  );
+
   // TODO: mock pagination for better perf in React
-  // TODO: fix for top links since it's technically link IDs
   const filteredData = useMemo(() => {
     if (limit) {
       return data.slice(0, limit);
@@ -51,20 +70,44 @@ export default function BarList({
 
   const { isMobile } = useMediaQuery();
 
+  const virtualize = filteredData.length > 100;
+
+  const itemProps = filteredData.map((data) => ({
+    ...data,
+    maxValue,
+    totalSum,
+    tab,
+    unit,
+    setShowModal,
+    barBackground,
+    hoverBackground,
+    limit,
+  }));
+
   const bars = (
-    <div className="grid">
-      {filteredData.map((data, idx) => (
-        <LineItem
-          key={idx}
-          {...data}
-          maxValue={maxValue}
-          tab={tab}
-          setShowModal={setShowModal}
-          barBackground={barBackground}
-          hoverBackground={hoverBackground}
-        />
-      ))}
-    </div>
+    <NumberFlowGroup>
+      <div className="relative grid h-full auto-rows-min grid-cols-1">
+        {virtualize ? (
+          <AutoSizer>
+            {({ width, height }) => (
+              <FixedSizeList
+                width={width}
+                height={height}
+                itemCount={filteredData.length}
+                itemSize={40}
+                itemData={itemProps}
+              >
+                {VirtualLineItem}
+              </FixedSizeList>
+            )}
+          </AutoSizer>
+        ) : (
+          filteredData.map((data, idx) => (
+            <LineItem key={idx} {...itemProps[idx]} />
+          ))
+        )}
+      </div>
+    </NumberFlowGroup>
   );
 
   if (limit) {
@@ -74,12 +117,12 @@ export default function BarList({
       <>
         <div className="relative px-4 py-3">
           <div className="pointer-events-none absolute inset-y-0 left-7 flex items-center">
-            <Search className="h-4 w-4 text-gray-400" />
+            <Search className="h-4 w-4 text-neutral-400" />
           </div>
           <input
             type="text"
             autoFocus={!isMobile}
-            className="w-full rounded-md border border-gray-300 py-2 pl-10 text-black placeholder:text-gray-400 focus:border-gray-500 focus:outline-none focus:ring-4 focus:ring-gray-200 sm:text-sm"
+            className="w-full rounded-md border border-neutral-300 py-2 pl-10 text-black placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-4 focus:ring-neutral-200 sm:text-sm"
             placeholder={`Search ${tab}...`}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -95,74 +138,166 @@ export function LineItem({
   title,
   href,
   value,
-  maxValue,
+  totalSum,
   tab,
+  unit,
   setShowModal,
   barBackground,
   hoverBackground,
   linkData,
+  limit,
 }: {
   icon: ReactNode;
   title: string;
-  href: string;
+  href?: string;
   value: number;
-  maxValue: number;
+  totalSum: number;
   tab: string;
+  unit: string;
   setShowModal: Dispatch<SetStateAction<boolean>>;
   barBackground: string;
   hoverBackground: string;
   linkData?: LinkProps;
+  limit?: number;
 }) {
   const lineItem = useMemo(() => {
     return (
-      <div className="z-10 flex items-center space-x-4 px-3">
+      <div className="z-10 flex items-center space-x-4 overflow-hidden px-3">
         {icon}
-        <div className="truncate text-sm text-gray-800">
-          {truncate(title, 36)}
+        <div className="truncate text-sm text-neutral-800">
+          {getPrettyUrl(title)}
         </div>
       </div>
     );
   }, [icon, tab, title]);
 
+  const { saleUnit } = useContext(AnalyticsContext);
+
+  const As = href ? Link : "div";
+
+  // Calculate percentage against total sum and round to 1 decimal
+  const percentage = Math.round((value / totalSum) * 1000) / 10;
+
+  // Check if we're in modal view - if limit is undefined, we're in the modal view
+  const isModalView = !limit;
+
   return (
-    <Link
-      href={href}
-      scroll={false}
-      onClick={() => setShowModal(false)}
-      className={`border-l-2 border-transparent px-4 py-1 ${hoverBackground} transition-all`}
+    // @ts-ignore - we know if it's a Link it'll get its href
+    <As
+      {...(href && {
+        href,
+        scroll: false,
+        onClick: () => setShowModal(false),
+      })}
+      className={cn(
+        `block min-w-0 border-l-2 border-transparent px-4 py-1 transition-all`,
+        href && hoverBackground,
+        isModalView ? "group" : "",
+      )}
     >
-      <div className="group flex items-center justify-between">
-        <div className="relative z-10 flex h-8 w-full max-w-[calc(100%-2rem)] items-center">
-          {tab === "link" && linkData ? (
+      <div
+        className={cn(
+          "relative flex items-center justify-between",
+          isModalView && "gap-16",
+        )}
+      >
+        <motion.div
+          style={{
+            width: `${percentage}%`,
+            position: "absolute",
+            inset: 0,
+          }}
+          className={cn("-z-10 h-full origin-left rounded-md", barBackground)}
+          transition={{ ease: "easeOut", duration: 0.3 }}
+          initial={{ transform: "scaleX(0)" }}
+          animate={{ transform: "scaleX(1)" }}
+        />
+        <div className="relative z-10 flex h-8 w-full min-w-0 max-w-[calc(100%-2rem)] items-center transition-[max-width] duration-300 ease-in-out group-hover:max-w-[calc(100%-5rem)]">
+          {tab === "links" && linkData ? (
             <Tooltip content={<LinkPreviewTooltip data={linkData} />}>
               {lineItem}
             </Tooltip>
-          ) : tab === "url" ? (
+          ) : tab === "urls" ? (
             <Tooltip
-              content={<LinkifyTooltipContent>{title}</LinkifyTooltipContent>}
+              content={
+                <div className="overflow-auto px-4 py-2">
+                  <LinkifyTooltipContent tooltipClassName="max-w-md">
+                    {title}
+                  </LinkifyTooltipContent>
+                </div>
+              }
             >
               {lineItem}
             </Tooltip>
           ) : (
             lineItem
           )}
-          <motion.div
-            style={{
-              width: `${(value / (maxValue || 0)) * 100}%`,
-            }}
-            className={cn(
-              "absolute h-full origin-left rounded-md",
-              barBackground,
-            )}
-            transition={{ ease: "easeOut", duration: 0.3 }}
-            initial={{ transform: "scaleX(0)" }}
-            animate={{ transform: "scaleX(1)" }}
-          />
         </div>
-        <NumberTooltip value={value}>
-          <p className="z-10 px-2 text-sm text-gray-600">{nFormatter(value)}</p>
-        </NumberTooltip>
+        <div className="z-10 flex items-center">
+          <NumberFlow
+            value={
+              unit === "sales" && saleUnit === "saleAmount"
+                ? value / 100
+                : value
+            }
+            className={cn(
+              "z-10 px-2 text-sm text-neutral-600 transition-transform duration-300",
+              isModalView ? "-translate-x-14" : "group-hover:-translate-x-14",
+            )}
+            style={{
+              // Adds translateZ(0) to fix transition jitter
+              transform: `translateX(var(--tw-translate-x, 0)) translateZ(0)`,
+            }}
+            format={
+              unit === "sales" && saleUnit === "saleAmount"
+                ? {
+                    style: "currency",
+                    currency: "USD",
+                    // @ts-ignore – trailingZeroDisplay is a valid option but TS is outdated
+                    trailingZeroDisplay: "stripIfInteger",
+                  }
+                : {
+                    notation: value > 999999 ? "compact" : "standard",
+                  }
+            }
+          />
+          <div
+            className={cn(
+              "absolute right-0 px-3 text-sm text-neutral-600/70 transition-all duration-300",
+              isModalView
+                ? "visible translate-x-0 opacity-100"
+                : "invisible translate-x-14 opacity-0 group-hover:visible group-hover:translate-x-0 group-hover:opacity-100",
+            )}
+            style={{
+              // Adds translateZ(0) to fix transition jitter
+              transform: `translateX(var(--tw-translate-x, 0)) translateZ(0)`,
+            }}
+          >
+            {percentage}%
+          </div>
+        </div>
       </div>
-    </Link>
+    </As>
   );
 }
+
+const VirtualLineItem = memo(
+  ({
+    data,
+    index,
+    style,
+  }: {
+    data: ComponentProps<typeof LineItem>[];
+    index: number;
+    style: any;
+  }) => {
+    const props = data[index];
+
+    return (
+      <div style={style}>
+        <LineItem {...props} />
+      </div>
+    );
+  },
+  areEqual,
+);

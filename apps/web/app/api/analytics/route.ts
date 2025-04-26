@@ -1,17 +1,24 @@
 import { VALID_ANALYTICS_ENDPOINTS } from "@/lib/analytics/constants";
 import { getAnalytics } from "@/lib/analytics/get-analytics";
+import { getFolderIdsToFilter } from "@/lib/analytics/get-folder-ids-to-filter";
 import { validDateRangeForPlan } from "@/lib/analytics/utils";
+import { getDomainOrThrow } from "@/lib/api/domains/get-domain-or-throw";
+import { getLinkOrThrow } from "@/lib/api/links/get-link-or-throw";
+import { throwIfClicksUsageExceeded } from "@/lib/api/links/usage-checks";
 import { withWorkspace } from "@/lib/auth";
-import { getDomainViaEdge } from "@/lib/planetscale";
+import { verifyFolderAccess } from "@/lib/folder/permissions";
 import {
   analyticsPathParamsSchema,
   analyticsQuerySchema,
 } from "@/lib/zod/schemas/analytics";
+import { Folder, Link } from "@dub/prisma/client";
 import { NextResponse } from "next/server";
 
 // GET /api/analytics – get analytics
 export const GET = withWorkspace(
-  async ({ params, searchParams, workspace, link }) => {
+  async ({ params, searchParams, workspace, session }) => {
+    throwIfClicksUsageExceeded(workspace);
+
     let { eventType: oldEvent, endpoint: oldType } =
       analyticsPathParamsSchema.parse(params);
 
@@ -23,24 +30,65 @@ export const GET = withWorkspace(
 
     const parsedParams = analyticsQuerySchema.parse(searchParams);
 
-    let { event, groupBy, domain, key, interval, start, end } = parsedParams;
+    let {
+      event,
+      groupBy,
+      interval,
+      start,
+      end,
+      linkId,
+      externalId,
+      domain,
+      key,
+      folderId,
+    } = parsedParams;
+
+    let link: Link | null = null;
 
     event = oldEvent || event;
     groupBy = oldType || groupBy;
 
+    if (domain) {
+      await getDomainOrThrow({ workspace, domain });
+    }
+
+    if (linkId || externalId || (domain && key)) {
+      link = await getLinkOrThrow({
+        workspaceId: workspace.id,
+        linkId,
+        externalId,
+        domain,
+        key,
+      });
+    }
+
+    const folderIdToVerify = link?.folderId || folderId;
+
+    let selectedFolder: Pick<Folder, "id" | "type"> | null = null;
+    if (folderIdToVerify) {
+      selectedFolder = await verifyFolderAccess({
+        workspace,
+        userId: session.user.id,
+        folderId: folderIdToVerify,
+        requiredPermission: "folders.read",
+      });
+    }
+
     validDateRangeForPlan({
       plan: workspace.plan,
+      dataAvailableFrom: workspace.createdAt,
       interval,
       start,
       end,
       throwError: true,
     });
 
-    const linkId = link
-      ? link.id
-      : domain && key === "_root"
-        ? await getDomainViaEdge(domain).then((d) => d?.id)
-        : null;
+    const folderIds = folderIdToVerify
+      ? undefined
+      : await getFolderIdsToFilter({
+          workspace,
+          userId: session.user.id,
+        });
 
     // Identify the request is from deprecated clicks endpoint
     // (/api/analytics/clicks)
@@ -54,14 +102,20 @@ export const GET = withWorkspace(
       ...parsedParams,
       event,
       groupBy,
-      ...(linkId && { linkId }),
+      ...(link && { linkId: link.id }),
+      folderIds,
+      isMegaFolder: selectedFolder?.type === "mega",
       workspaceId: workspace.id,
       isDeprecatedClicksEndpoint,
+      // dataAvailableFrom is only relevant for timeseries groupBy
+      ...(groupBy === "timeseries" && {
+        dataAvailableFrom: workspace.createdAt,
+      }),
     });
 
     return NextResponse.json(response);
   },
   {
-    needNotExceededClicks: true,
+    requiredPermissions: ["analytics.read"],
   },
 );

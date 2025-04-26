@@ -1,3 +1,6 @@
+const { PrismaPlugin } = require("@prisma/nextjs-monorepo-workaround-plugin");
+const { withAxiom } = require("next-axiom");
+
 const REDIRECT_SEGMENTS = [
   "pricing",
   "blog",
@@ -8,15 +11,19 @@ const REDIRECT_SEGMENTS = [
 ];
 
 /** @type {import('next').NextConfig} */
-module.exports = {
+module.exports = withAxiom({
   reactStrictMode: false,
-  experimental: {
-    serverComponentsExternalPackages: [
-      "@react-email/components",
-      "@react-email/render",
-      "@react-email/tailwind",
-    ],
-  },
+  transpilePackages: [
+    "shiki",
+    "@dub/prisma",
+    "@dub/email",
+    "@boxyhq/saml-jackson",
+  ],
+  ...(process.env.NODE_ENV === "production" && {
+    experimental: {
+      esmExternals: "loose",
+    },
+  }),
   webpack: (config, { webpack, isServer }) => {
     if (isServer) {
       config.plugins.push(
@@ -26,6 +33,8 @@ module.exports = {
             /(^@google-cloud\/spanner|^@mongodb-js\/zstd|^aws-crt|^aws4$|^pg-native$|^mongodb-client-encryption$|^@sap\/hana-client$|^@sap\/hana-client\/extension\/Stream$|^snappy$|^react-native-sqlite-storage$|^bson-ext$|^cardinal$|^kerberos$|^hdb-pool$|^sql.js$|^sqlite3$|^better-sqlite3$|^ioredis$|^typeorm-aurora-data-api-driver$|^pg-query-stream$|^oracledb$|^mysql$|^snappy\/package\.json$|^cloudflare:sockets$)/,
         }),
       );
+
+      config.plugins = [...config.plugins, new PrismaPlugin()];
     }
 
     config.module = {
@@ -42,6 +51,9 @@ module.exports = {
       },
       {
         hostname: "dubassets.com", // for Dub's user generated images
+      },
+      {
+        hostname: "dev.dubassets.com", // dev bucket
       },
       {
         hostname: "www.google.com",
@@ -85,6 +97,15 @@ module.exports = {
           {
             key: "X-Frame-Options",
             value: "DENY",
+          },
+        ],
+      },
+      {
+        source: "/embed/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors *",
           },
         ],
       },
@@ -145,30 +166,6 @@ module.exports = {
         ),
       ),
       {
-        source: "/metatags",
-        has: [
-          {
-            type: "host",
-            value: "dub.sh",
-          },
-        ],
-        destination: "https://dub.co/tools/metatags",
-        permanent: true,
-        statusCode: 301,
-      },
-      {
-        source: "/metatags",
-        has: [
-          {
-            type: "host",
-            value: "dub.co",
-          },
-        ],
-        destination: "/tools/metatags",
-        permanent: true,
-        statusCode: 301,
-      },
-      {
         source: "/",
         has: [
           {
@@ -206,4 +203,31 @@ module.exports = {
       },
     ];
   },
-};
+  async rewrites() {
+    return [
+      // for dub proxy
+      {
+        source: "/_proxy/dub/track/click",
+        destination: "https://api.dub.co/track/click",
+      },
+      // for posthog proxy
+      {
+        source: "/_proxy/posthog/ingest/static/:path*",
+        destination: "https://us-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/_proxy/posthog/ingest/:path*",
+        destination: "https://us.i.posthog.com/:path*",
+      },
+      // for plausible proxy
+      {
+        source: "/_proxy/plausible/script.js",
+        destination: "https://plausible.io/js/script.js",
+      },
+      {
+        source: "/_proxy/plausible/event",
+        destination: "https://plausible.io/api/event",
+      },
+    ];
+  },
+});

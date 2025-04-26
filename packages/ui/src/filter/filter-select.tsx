@@ -1,7 +1,8 @@
 import { cn, truncate } from "@dub/utils";
 import { Command, useCommandState } from "cmdk";
-import { Check, ChevronDown, ListFilter } from "lucide-react";
+import { ChevronDown, ListFilter } from "lucide-react";
 import {
+  Fragment,
   PropsWithChildren,
   ReactNode,
   forwardRef,
@@ -13,22 +14,26 @@ import {
   useState,
 } from "react";
 import { AnimatedSizeContainer } from "../animated-size-container";
-import { useMediaQuery, useResizeObserver } from "../hooks";
-import { LoadingSpinner, Magic } from "../icons";
+import { useKeyboardShortcut, useMediaQuery } from "../hooks";
+import { useScrollProgress } from "../hooks/use-scroll-progress";
+import { Check, LoadingSpinner, Magic } from "../icons";
 import { Popover } from "../popover";
 import { Filter, FilterOption } from "./types";
 
 type FilterSelectProps = {
   filters: Filter[];
-  onSelect: (key: string, value: string) => void;
-  onRemove: (key: string) => void;
+  onSelect: (key: string, value: FilterOption["value"]) => void;
+  onRemove: (key: string, value: FilterOption["value"]) => void;
   onOpenFilter?: (key: string) => void;
+  onSearchChange?: (search: string) => void;
+  onSelectedFilterChange?: (key: string | null) => void;
   activeFilters?: {
     key: Filter["key"];
     value: FilterOption["value"];
   }[];
   askAI?: boolean;
   children?: ReactNode;
+  emptyState?: ReactNode | Record<string, ReactNode>;
   className?: string;
 };
 
@@ -37,21 +42,29 @@ export function FilterSelect({
   onSelect,
   onRemove,
   onOpenFilter,
+  onSearchChange,
+  onSelectedFilterChange,
   activeFilters,
   askAI,
   children,
+  emptyState,
   className,
 }: FilterSelectProps) {
   const { isMobile } = useMediaQuery();
 
   // Track main list container/dimensions to maintain size for loading spinner
-  const mainListContainer = useRef<HTMLDivElement>(null);
-  const mainListDimensions = useRef<{
+  const listContainer = useRef<HTMLDivElement>(null);
+  const listDimensions = useRef<{
     width: number;
     height: number;
   }>();
 
   const [isOpen, setIsOpen] = useState(false);
+
+  useKeyboardShortcut("f", () => setIsOpen(true), {
+    enabled: !isOpen,
+  });
+
   const [search, setSearch] = useState("");
   const [selectedFilterKey, setSelectedFilterKey] = useState<
     Filter["key"] | null
@@ -73,10 +86,11 @@ export function FilterSelect({
     : null;
 
   const openFilter = useCallback((key: Filter["key"]) => {
-    if (mainListContainer.current) {
-      mainListDimensions.current = {
-        width: mainListContainer.current.scrollWidth,
-        height: mainListContainer.current.scrollHeight,
+    // Maintain dimensions for loading options
+    if (listContainer.current) {
+      listDimensions.current = {
+        width: listContainer.current.clientWidth,
+        height: listContainer.current.clientHeight,
       };
     }
 
@@ -85,19 +99,57 @@ export function FilterSelect({
     onOpenFilter?.(key);
   }, []);
 
+  const isOptionSelected = useCallback(
+    (value: FilterOption["value"]) => {
+      if (!selectedFilter || !activeFilters) return false;
+
+      const activeFilter = activeFilters.find(
+        ({ key }) => key === selectedFilterKey,
+      );
+
+      return (
+        activeFilter?.value === value ||
+        (activeFilter &&
+          selectedFilter.multiple &&
+          Array.isArray(activeFilter.value) &&
+          activeFilter.value.includes(value))
+      );
+    },
+    [selectedFilter],
+  );
+
   const selectOption = useCallback(
     (value: FilterOption["value"]) => {
       if (selectedFilter) {
-        activeFilters?.find(({ key }) => key === selectedFilterKey)?.value ===
-        value
-          ? onRemove(selectedFilter.key)
-          : onSelect(selectedFilter.key, value);
-      }
+        const isSelected = isOptionSelected(value);
 
-      setIsOpen(false);
+        isSelected
+          ? onRemove(selectedFilter.key, value)
+          : onSelect(selectedFilter.key, value);
+
+        if (!selectedFilter.multiple) setIsOpen(false);
+      }
     },
     [activeFilters, selectedFilter, askAI],
   );
+
+  useEffect(() => {
+    onSearchChange?.(search);
+  }, [search]);
+
+  useEffect(() => {
+    onSelectedFilterChange?.(selectedFilterKey);
+  }, [selectedFilterKey]);
+
+  // If filter is selected and has options, maintain dimensions (for async fetches)
+  useEffect(() => {
+    if (selectedFilter?.options && listContainer.current) {
+      listDimensions.current = {
+        width: listContainer.current.clientWidth,
+        height: listContainer.current.clientHeight,
+      };
+    }
+  }, [selectedFilter?.options]);
 
   return (
     <Popover
@@ -116,34 +168,49 @@ export function FilterSelect({
           className="rounded-[inherit]"
           style={{ transform: "translateZ(0)" }} // Fixes overflow on some browsers
         >
-          <Command loop>
-            <CommandInput
-              placeholder={`${selectedFilter?.label || "Filter"}...`}
-              value={search}
-              onValueChange={setSearch}
-              onKeyDown={(e) => {
-                if (e.key === "Escape" || (e.key === "Backspace" && !search)) {
+          <Command
+            loop
+            shouldFilter={
+              !selectedFilter || selectedFilter.shouldFilter !== false
+            }
+          >
+            <div className="flex items-center overflow-hidden rounded-t-lg border-b border-neutral-200">
+              <CommandInput
+                placeholder={`${selectedFilter?.label || "Filter"}...`}
+                value={search}
+                onValueChange={setSearch}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Escape" ||
+                    (e.key === "Backspace" && !search)
+                  ) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    selectedFilterKey ? reset() : setIsOpen(false);
+                  }
+                }}
+                emptySubmit={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  selectedFilterKey ? reset() : setIsOpen(false);
-                }
-              }}
-              emptySubmit={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (askAI) {
-                  onSelect(
-                    "ai",
-                    // Prepend search with selected filter label for more context
-                    selectedFilter
-                      ? `${selectedFilter.label} ${search}`
-                      : search,
-                  );
-                  setIsOpen(false);
-                } else selectOption(search);
-              }}
-            />
-            <FilterScroll key={selectedFilterKey} ref={mainListContainer}>
+                  if (askAI) {
+                    onSelect(
+                      "ai",
+                      // Prepend search with selected filter label for more context
+                      selectedFilter
+                        ? `${selectedFilter.label} ${search}`
+                        : search,
+                    );
+                    setIsOpen(false);
+                  } else selectOption(search);
+                }}
+              />
+              {!selectedFilter && (
+                <kbd className="mr-2 hidden shrink-0 rounded border border-neutral-200 bg-neutral-100 px-2 py-0.5 text-xs font-light text-neutral-500 md:block">
+                  F
+                </kbd>
+              )}
+            </div>
+            <FilterScroll key={selectedFilterKey} ref={listContainer}>
               <Command.List
                 className={cn(
                   "flex w-full flex-col gap-1 p-1",
@@ -153,45 +220,43 @@ export function FilterSelect({
                 {!selectedFilter
                   ? // Top-level filters
                     filters.map((filter) => (
-                      <>
+                      <Fragment key={filter.key}>
                         <FilterButton
-                          key={filter.key}
                           filter={filter}
                           onSelect={() => openFilter(filter.key)}
                         />
                         {filter.separatorAfter && (
-                          <Command.Separator className="-mx-1 my-1 border-b border-gray-200" />
+                          <Command.Separator className="-mx-1 my-1 border-b border-neutral-200" />
                         )}
-                      </>
+                      </Fragment>
                     ))
                   : // Filter options
-                    selectedFilter.options?.map((option) => {
-                      const isSelected =
-                        activeFilters?.find(
-                          ({ key }) => key === selectedFilterKey,
-                        )?.value === option.value;
+                    selectedFilter.options
+                      ?.filter((option) => !search || !option.hideDuringSearch)
+                      ?.map((option) => {
+                        const isSelected = isOptionSelected(option.value);
 
-                      return (
-                        <FilterButton
-                          key={option.value}
-                          filter={selectedFilter}
-                          option={option}
-                          right={
-                            isSelected ? (
-                              <Check className="h-4 w-4" />
-                            ) : (
-                              option.right
-                            )
-                          }
-                          onSelect={() => selectOption(option.value)}
-                        />
-                      );
-                    }) ?? (
+                        return (
+                          <FilterButton
+                            key={option.value}
+                            filter={selectedFilter}
+                            option={option}
+                            right={
+                              isSelected ? (
+                                <Check className="h-4 w-4" />
+                              ) : (
+                                option.right
+                              )
+                            }
+                            onSelect={() => selectOption(option.value)}
+                          />
+                        );
+                      }) ?? (
                       // Filter options loading state
                       <Command.Loading>
                         <div
                           className="-m-1 flex items-center justify-center"
-                          style={mainListDimensions.current}
+                          style={listDimensions.current}
                         >
                           <LoadingSpinner />
                         </div>
@@ -200,7 +265,14 @@ export function FilterSelect({
 
                 {/* Only render CommandEmpty if not loading */}
                 {(!selectedFilter || selectedFilter.options) && (
-                  <CommandEmpty search={search} askAI={askAI} />
+                  <CommandEmpty search={search} askAI={askAI}>
+                    {emptyState
+                      ? isEmptyStateObject(emptyState)
+                        ? emptyState?.[selectedFilterKey ?? "default"] ??
+                          "No matches"
+                        : emptyState
+                      : "No matches"}
+                  </CommandEmpty>
                 )}
               </Command.List>
             </FilterScroll>
@@ -211,29 +283,37 @@ export function FilterSelect({
       <button
         type="button"
         className={cn(
-          "group flex h-10 cursor-pointer appearance-none items-center gap-x-2 truncate rounded-md border px-3 outline-none transition-all sm:text-sm",
-          "border-gray-200 bg-white text-gray-900 placeholder-gray-400",
-          "focus-visible:border-gray-500 data-[state=open]:border-gray-500 data-[state=open]:ring-4 data-[state=open]:ring-gray-200",
+          "group flex h-10 cursor-pointer appearance-none items-center gap-x-2 truncate rounded-md border px-3 text-sm outline-none transition-all",
+          "border-neutral-200 bg-white text-neutral-900 placeholder-neutral-400",
+          "focus-visible:border-neutral-500 data-[state=open]:border-neutral-500 data-[state=open]:ring-4 data-[state=open]:ring-neutral-200",
           className,
         )}
       >
-        <ListFilter className="h-4 w-4 shrink-0" />
-        <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left text-gray-900">
+        <ListFilter className="size-4 shrink-0" />
+        <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left text-neutral-900">
           {children ?? "Filter"}
         </span>
-        <div className="ml-1">
-          {activeFilters?.length ? (
-            <div className="flex h-4 w-4 items-center justify-center rounded-full bg-black text-[0.625rem] text-white">
-              {activeFilters.length}
-            </div>
-          ) : (
-            <ChevronDown
-              className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-75 group-data-[state=open]:rotate-180`}
-            />
-          )}
-        </div>
+        {activeFilters?.length ? (
+          <div className="flex size-4 shrink-0 items-center justify-center rounded-full bg-black text-[0.625rem] text-white">
+            {activeFilters.length}
+          </div>
+        ) : (
+          <ChevronDown
+            className={`size-4 shrink-0 text-neutral-400 transition-transform duration-75 group-data-[state=open]:rotate-180`}
+          />
+        )}
       </button>
     </Popover>
+  );
+}
+
+function isEmptyStateObject(
+  emptyState: ReactNode | Record<string, ReactNode>,
+): emptyState is Record<string, ReactNode> {
+  return (
+    typeof emptyState === "object" &&
+    emptyState !== null &&
+    !isValidElement(emptyState)
   );
 }
 
@@ -247,7 +327,7 @@ const CommandInput = (
     <Command.Input
       {...props}
       size={1}
-      className="w-full rounded-t-lg border-0 border-b border-gray-200 px-4 py-3 text-sm ring-0 placeholder:text-gray-400 focus:border-gray-200 focus:ring-0"
+      className="grow border-0 py-3 pl-4 pr-2 outline-none placeholder:text-neutral-400 focus:ring-0 sm:text-sm"
       onKeyDown={(e) => {
         props.onKeyDown?.(e);
 
@@ -255,6 +335,7 @@ const CommandInput = (
           props.emptySubmit?.(e);
         }
       }}
+      autoCapitalize="none"
     />
   );
 };
@@ -264,22 +345,7 @@ const FilterScroll = forwardRef(
     const ref = useRef<HTMLDivElement>(null);
     useImperativeHandle(forwardedRef, () => ref.current);
 
-    const [scrollProgress, setScrollProgress] = useState(1);
-
-    const updateScrollProgress = useCallback(() => {
-      if (!ref.current) return;
-      const { scrollTop, scrollHeight, clientHeight } = ref.current;
-
-      setScrollProgress(
-        scrollHeight === clientHeight
-          ? 1
-          : scrollTop / (scrollHeight - clientHeight),
-      );
-    }, []);
-
-    const resizeObserverEntry = useResizeObserver(ref);
-
-    useEffect(updateScrollProgress, [resizeObserverEntry]);
+    const { scrollProgress, updateScrollProgress } = useScrollProgress(ref);
 
     return (
       <>
@@ -311,6 +377,8 @@ function FilterButton({
   right?: ReactNode;
   onSelect: () => void;
 }) {
+  const { isMobile } = useMediaQuery();
+
   const Icon = option
     ? option.icon ??
       filter.getOptionIcon?.(option.value, { key: filter.key, option }) ??
@@ -326,16 +394,25 @@ function FilterButton({
     <Command.Item
       className={cn(
         "flex cursor-pointer items-center gap-3 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm",
-        "data-[selected=true]:bg-gray-100",
+        "data-[selected=true]:bg-neutral-100",
       )}
+      onPointerDown={(e) => {
+        e.preventDefault();
+      }}
+      onPointerUp={(e) => {
+        e.preventDefault();
+        // Mobile touches have some sort of delay that can cause the next page's option's
+        // onClick / onSelect to be triggered so we delay this by 100ms to account for it
+        isMobile ? setTimeout(onSelect, 100) : onSelect();
+      }}
       onSelect={onSelect}
-      value={label}
+      value={label + option?.value}
     >
-      <span className="shrink-0 text-gray-600">
+      <span className="shrink-0 text-neutral-600">
         {isReactNode(Icon) ? Icon : <Icon className="h-4 w-4" />}
       </span>
       {truncate(label, 48)}
-      <div className="ml-1 flex shrink-0 grow justify-end text-gray-500">
+      <div className="ml-1 flex shrink-0 grow justify-end text-neutral-500">
         {right}
       </div>
     </Command.Item>
@@ -345,23 +422,24 @@ function FilterButton({
 const CommandEmpty = ({
   search,
   askAI,
-}: {
+  children,
+}: PropsWithChildren<{
   search: string;
   askAI?: boolean;
-}) => {
+}>) => {
   if (askAI && search) {
     return (
-      <Command.Empty className="flex min-w-[180px] items-center space-x-2 rounded-md bg-gray-100 px-3 py-2">
+      <Command.Empty className="flex min-w-[180px] items-center space-x-2 rounded-md bg-neutral-100 px-3 py-2">
         <Magic className="h-4 w-4" />
-        <p className="text-center text-sm text-gray-600">
+        <p className="text-center text-sm text-neutral-600">
           Ask AI <span className="text-black">"{search}"</span>
         </p>
       </Command.Empty>
     );
   } else {
     return (
-      <Command.Empty className="p-2 text-center text-sm text-gray-400">
-        No matches
+      <Command.Empty className="p-2 text-center text-sm text-neutral-400">
+        {children}
       </Command.Empty>
     );
   }

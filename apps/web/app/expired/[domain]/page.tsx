@@ -1,50 +1,96 @@
-import { getDomainViaEdge } from "@/lib/planetscale";
-import { Background, Footer, Nav } from "@dub/ui";
-import { constructMetadata } from "@dub/utils";
-import { TimerOff } from "lucide-react";
+import { getDomainViaEdge } from "@/lib/planetscale/get-domain-via-edge";
+import { BubbleIcon } from "@/ui/placeholders/bubble-icon";
+import { ButtonLink } from "@/ui/placeholders/button-link";
+import { CTA } from "@/ui/placeholders/cta";
+import { FeaturesSection } from "@/ui/placeholders/features-section";
+import { Hero } from "@/ui/placeholders/hero";
+import { CircleHalfDottedClock, Footer, Nav, NavMobile } from "@dub/ui";
+import { cn, constructMetadata, createHref } from "@dub/utils";
 import { redirect } from "next/navigation";
 
 export const runtime = "edge";
 
 export const metadata = constructMetadata({
-  title: "Expired Link – Dub.co",
+  title: "Expired Link",
   description:
     "This link has expired. Please contact the owner of this link to get a new one.",
   noIndex: true,
 });
 
-export default async function ExpiredPage({
+const UTM_PARAMS = {
+  utm_source: "Expired Link",
+  utm_medium: "Expired Link Page",
+};
+
+export default async function ExpiredLinkPage({
   params,
 }: {
   params: { domain: string };
 }) {
-  const domain = await getDomainViaEdge(params.domain);
+  const domainEdge = await getDomainViaEdge(params.domain);
 
-  if (domain?.expiredUrl) {
-    redirect(domain.expiredUrl);
+  if (domainEdge?.expiredUrl) {
+    redirect(domainEdge.expiredUrl);
   }
 
   return (
     <main className="flex min-h-screen flex-col justify-between">
-      <Nav />
-      <div className="z-10 mx-2 my-10 flex max-w-md flex-col items-center space-y-5 px-2.5 text-center sm:mx-auto sm:max-w-lg sm:px-0 lg:mb-16">
-        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-gray-300 bg-white/30">
-          <TimerOff className="h-6 w-6 text-gray-400" />
+      <NavMobile />
+      <Nav maxWidthWrapperClassName="max-w-screen-lg lg:px-4 xl:px-0" />
+      <div>
+        <Hero>
+          <div className="relative mx-auto flex w-full max-w-md flex-col items-center">
+            <BubbleIcon>
+              <CircleHalfDottedClock className="size-12" />
+            </BubbleIcon>
+            <h1
+              className={cn(
+                "font-display mt-10 text-center text-4xl font-medium text-neutral-900 sm:text-5xl sm:leading-[1.15]",
+                "animate-slide-up-fade motion-reduce:animate-fade-in [--offset:20px] [animation-duration:1s] [animation-fill-mode:both]",
+              )}
+            >
+              Expired link
+            </h1>
+            <p
+              className={cn(
+                "mt-5 text-pretty text-base text-neutral-700 sm:text-xl",
+                "animate-slide-up-fade motion-reduce:animate-fade-in [--offset:10px] [animation-delay:200ms] [animation-duration:1s] [animation-fill-mode:both]",
+              )}
+            >
+              This link has expired. Please contact the owner of this link to
+              get a new one.
+            </p>
+          </div>
+
+          <div
+            className={cn(
+              "xs:flex-row relative mx-auto mt-8 flex max-w-fit flex-col items-center gap-4",
+              "animate-slide-up-fade motion-reduce:animate-fade-in [--offset:5px] [animation-delay:300ms] [animation-duration:1s] [animation-fill-mode:both]",
+            )}
+          >
+            <ButtonLink variant="primary" href="https://app.dub.co/register">
+              Try Dub today
+            </ButtonLink>
+            <ButtonLink
+              variant="secondary"
+              href={createHref("/home", params.domain, {
+                ...UTM_PARAMS,
+                utm_campaign: params.domain,
+                utm_content: "Learn more",
+              })}
+            >
+              Learn more
+            </ButtonLink>
+          </div>
+        </Hero>
+        <div className="mt-20">
+          <FeaturesSection domain={params.domain} utmParams={UTM_PARAMS} />
         </div>
-        <h1 className="font-display text-5xl font-bold">Expired Link</h1>
-        <p className="text-lg text-gray-600">
-          This link has expired. Please contact the owner of this link to get a
-          new one.
-        </p>
-        <a
-          href="https://dub.co"
-          className="rounded-full bg-gray-800 px-10 py-2 font-medium text-white transition-colors hover:bg-black"
-        >
-          Create Your Free Branded Link
-        </a>
+        <div className="mt-32">
+          <CTA domain={params.domain} utmParams={UTM_PARAMS} />
+        </div>
       </div>
-      <Footer />
-      <Background />
+      <Footer className="max-w-screen-lg border-0 bg-transparent lg:px-4 xl:px-0" />
     </main>
   );
 }

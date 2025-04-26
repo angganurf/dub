@@ -1,21 +1,22 @@
-import { Link } from "@prisma/client";
+import { normalizeWorkspaceId } from "@/lib/api/workspace-id";
+import { Link } from "@dub/prisma/client";
 import { afterAll, describe, expect, test } from "vitest";
 import { randomId } from "../utils/helpers";
 import { IntegrationHarness } from "../utils/integration";
-import { link } from "../utils/resource";
+import { E2E_LINK } from "../utils/resource";
 import { expectedLink } from "../utils/schema";
 
-const { domain, url } = link;
+const { domain, url } = E2E_LINK;
 
 describe.sequential("PATCH /links/{linkId}", async () => {
   const h = new IntegrationHarness();
   const { workspace, http, user } = await h.init();
-  const { workspaceId } = workspace;
+  const workspaceId = workspace.id;
+  const projectId = normalizeWorkspaceId(workspaceId);
   const externalId = randomId();
 
   const { data: link } = await http.post<Link>({
     path: "/links",
-    query: { workspaceId },
     body: {
       url,
       domain,
@@ -28,7 +29,6 @@ describe.sequential("PATCH /links/{linkId}", async () => {
     url: "https://github.com/dubinc/dub",
     title: "Dub Inc",
     description: "Open-source link management infrastructure.",
-    publicStats: true,
     comments: "This is a comment.",
     expiresAt: new Date("2030-04-16T17:00:00.000Z"),
     expiredUrl: "https://github.com/expired",
@@ -48,7 +48,6 @@ describe.sequential("PATCH /links/{linkId}", async () => {
   test("update link using linkId", async () => {
     const { data: updatedLink } = await http.patch<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
       body: { ...toUpdate },
     });
 
@@ -60,16 +59,14 @@ describe.sequential("PATCH /links/{linkId}", async () => {
       externalId,
       userId: user.id,
       expiresAt: "2030-04-16T17:00:00.000Z",
-      projectId: workspaceId.replace("ws_", ""),
+      projectId,
       shortLink: `https://${domain}/${toUpdate.key}`,
       qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-      tags: [],
     });
 
     // Fetch the link
     const { data: fetchedLink } = await http.get<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
     });
 
     expect(fetchedLink).toStrictEqual({
@@ -80,10 +77,9 @@ describe.sequential("PATCH /links/{linkId}", async () => {
       externalId,
       userId: user.id,
       expiresAt: "2030-04-16T17:00:00.000Z",
-      projectId: workspaceId.replace("ws_", ""),
+      projectId,
       shortLink: `https://${domain}/${toUpdate.key}`,
       qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-      tags: [],
     });
   });
 
@@ -91,7 +87,6 @@ describe.sequential("PATCH /links/{linkId}", async () => {
   test("archive link", async () => {
     const { status, data: updatedLink } = await http.patch<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
       body: {
         archived: true,
       },
@@ -107,16 +102,14 @@ describe.sequential("PATCH /links/{linkId}", async () => {
       archived: true,
       userId: user.id,
       expiresAt: "2030-04-16T17:00:00.000Z",
-      projectId: workspaceId.replace("ws_", ""),
+      projectId,
       shortLink: `https://${domain}/${toUpdate.key}`,
       qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-      tags: [],
     });
 
     // Fetch the link
     const { data: archivedLink } = await http.get<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
     });
 
     expect(archivedLink.archived).toEqual(true);
@@ -126,7 +119,6 @@ describe.sequential("PATCH /links/{linkId}", async () => {
   test("unarchive link", async () => {
     const { status, data: updatedLink } = await http.patch<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
       body: {
         archived: false,
       },
@@ -142,16 +134,14 @@ describe.sequential("PATCH /links/{linkId}", async () => {
       archived: false,
       userId: user.id,
       expiresAt: "2030-04-16T17:00:00.000Z",
-      projectId: workspaceId.replace("ws_", ""),
+      projectId,
       shortLink: `https://${domain}/${toUpdate.key}`,
       qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-      tags: [],
     });
 
     // Fetch the link
     const { data: unarchivedLink } = await http.get<Link>({
       path: `/links/${link.id}`,
-      query: { workspaceId },
     });
 
     expect(unarchivedLink.archived).toEqual(false);
@@ -161,7 +151,6 @@ describe.sequential("PATCH /links/{linkId}", async () => {
   test("update link using externalId", async () => {
     const { status, data: updatedLink } = await http.patch<Link>({
       path: `/links/ext_${externalId}`,
-      query: { workspaceId },
       body: {
         url: "https://github.com/dubinc",
       },
@@ -178,16 +167,14 @@ describe.sequential("PATCH /links/{linkId}", async () => {
       userId: user.id,
       url: "https://github.com/dubinc",
       expiresAt: "2030-04-16T17:00:00.000Z",
-      projectId: workspaceId.replace("ws_", ""),
+      projectId,
       shortLink: `https://${domain}/${toUpdate.key}`,
       qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-      tags: [],
     });
 
     // Fetch the link
     const { data: linkUpdated } = await http.get<Link>({
       path: `/links/ext_${externalId}`,
-      query: { workspaceId },
     });
 
     expect(linkUpdated.url).toEqual("https://github.com/dubinc");
@@ -199,12 +186,12 @@ describe.sequential(
   async () => {
     const h = new IntegrationHarness();
     const { workspace, http, user } = await h.init();
-    const { workspaceId } = workspace;
+    const workspaceId = workspace.id;
+    const projectId = normalizeWorkspaceId(workspaceId);
     const externalId = randomId();
 
     const { data: link } = await http.post<Link>({
       path: "/links",
-      query: { workspaceId },
       body: {
         url,
         domain,
@@ -217,7 +204,6 @@ describe.sequential(
       url: "https://github.com/dubinc/dub",
       title: "Dub Inc",
       description: "Open-source link management infrastructure.",
-      publicStats: true,
       comments: "This is a comment.",
       expiresAt: new Date("2030-04-16T17:00:00.000Z"),
       expiredUrl: "https://github.com/expired",
@@ -237,7 +223,6 @@ describe.sequential(
     test("update link using PUT", async () => {
       const { data: updatedLink } = await http.put<Link>({
         path: `/links/${link.id}`,
-        query: { workspaceId },
         body: { ...toUpdate },
       });
 
@@ -249,16 +234,14 @@ describe.sequential(
         externalId,
         userId: user.id,
         expiresAt: "2030-04-16T17:00:00.000Z",
-        projectId: workspaceId.replace("ws_", ""),
+        projectId,
         shortLink: `https://${domain}/${toUpdate.key}`,
         qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-        tags: [],
       });
 
       // Fetch the link
       const { data: fetchedLink } = await http.get<Link>({
         path: `/links/${link.id}`,
-        query: { workspaceId },
       });
 
       expect(fetchedLink).toStrictEqual({
@@ -269,10 +252,9 @@ describe.sequential(
         externalId,
         userId: user.id,
         expiresAt: "2030-04-16T17:00:00.000Z",
-        projectId: workspaceId.replace("ws_", ""),
+        projectId,
         shortLink: `https://${domain}/${toUpdate.key}`,
         qrCode: `https://api.dub.co/qr?url=https://${domain}/${toUpdate.key}?qr=1`,
-        tags: [],
       });
     });
   },

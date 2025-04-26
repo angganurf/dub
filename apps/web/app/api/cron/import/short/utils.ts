@@ -1,17 +1,19 @@
+import { createId } from "@/lib/api/create-id";
 import { bulkCreateLinks } from "@/lib/api/links";
 import { qstash } from "@/lib/cron";
-import { prisma } from "@/lib/prisma";
 import { redis } from "@/lib/upstash";
 import { randomBadgeColor } from "@/ui/links/tag-badge";
-import { APP_DOMAIN_WITH_NGROK } from "@dub/utils";
-import { sendEmail } from "emails";
-import LinksImported from "emails/links-imported";
+import { sendEmail } from "@dub/email";
+import { LinksImported } from "@dub/email/templates/links-imported";
+import { prisma } from "@dub/prisma";
+import { APP_DOMAIN_WITH_NGROK, linkConstructorSimple } from "@dub/utils";
 
 export const importLinksFromShort = async ({
   workspaceId,
   userId,
   domainId,
   domain,
+  folderId,
   importTags,
   pageToken = null,
   count = 0,
@@ -21,6 +23,7 @@ export const importLinksFromShort = async ({
   userId: string;
   domainId: number;
   domain: string;
+  folderId?: string;
   importTags?: boolean;
   pageToken?: string | null;
   count?: number;
@@ -69,11 +72,16 @@ export const importLinksFromShort = async ({
           domain,
           key: path,
           url: originalURL,
+          shortLink: linkConstructorSimple({
+            domain,
+            key: path,
+          }),
           title,
           ios: iphoneURL,
           android: androidURL,
           archived,
           tags,
+          folderId,
           createdAt,
         };
       },
@@ -83,19 +91,18 @@ export const importLinksFromShort = async ({
   // check if links are already in the database
   const alreadyCreatedLinks = await prisma.link.findMany({
     where: {
-      domain,
-      key: {
-        in: importedLinks.map((link) => link.key),
+      shortLink: {
+        in: importedLinks.map((link) => link.shortLink),
       },
     },
     select: {
-      key: true,
+      shortLink: true,
     },
   });
 
   // filter out links that are already in the database
   const linksToCreate = importedLinks.filter(
-    (link) => !alreadyCreatedLinks.some((l) => l.key === link.key),
+    (link) => !alreadyCreatedLinks.some((l) => l.shortLink === link.shortLink),
   );
 
   // import tags into database
@@ -114,6 +121,7 @@ export const importLinksFromShort = async ({
         // filter out existing tags with the same name
         .filter((tag) => !existingTags.some((t) => t.name === tag))
         .map((tag) => ({
+          id: createId({ prefix: "tag_" }),
           name: tag,
           color: randomBadgeColor(),
           projectId: workspaceId,
@@ -226,6 +234,7 @@ export const importLinksFromShort = async ({
         userId,
         domainId,
         domain,
+        folderId,
         pageToken: nextPageToken,
         count,
       },

@@ -1,20 +1,34 @@
 import { parse } from "@/lib/middleware/utils";
 import { NextRequest, NextResponse } from "next/server";
+import EmbedMiddleware from "./embed";
 import NewLinkMiddleware from "./new-link";
+import { appRedirect } from "./utils/app-redirect";
 import { getDefaultWorkspace } from "./utils/get-default-workspace";
+import { getOnboardingStep } from "./utils/get-onboarding-step";
 import { getUserViaToken } from "./utils/get-user-via-token";
+import { isTopLevelSettingsRedirect } from "./utils/is-top-level-settings-redirect";
+import WorkspacesMiddleware from "./workspaces";
 
 export default async function AppMiddleware(req: NextRequest) {
   const { path, fullPath, searchParamsString } = parse(req);
+
+  if (path.startsWith("/embed")) {
+    return EmbedMiddleware(req);
+  }
+
   const user = await getUserViaToken(req);
-  const isWorkspaceInvite = req.nextUrl.searchParams.get("invite");
+  const isWorkspaceInvite =
+    req.nextUrl.searchParams.get("invite") || path.startsWith("/invites/");
 
   // if there's no user and the path isn't /login or /register, redirect to /login
   if (
     !user &&
     path !== "/login" &&
+    path !== "/forgot-password" &&
     path !== "/register" &&
-    path !== "/auth/saml"
+    path !== "/auth/saml" &&
+    !path.startsWith("/auth/reset-password/") &&
+    !path.startsWith("/share/")
   ) {
     return NextResponse.redirect(
       new URL(
@@ -29,29 +43,62 @@ export default async function AppMiddleware(req: NextRequest) {
     if (path === "/new") {
       return NewLinkMiddleware(req, user);
 
-      // if the user was created in the last 10s
-      // (this is a workaround because the `isNewUser` flag is triggered when a user does `dangerousEmailAccountLinking`)
-    } else if (
-      user.createdAt &&
-      new Date(user.createdAt).getTime() > Date.now() - 10000 &&
-      // here we include the root page + /new (since they're going through welcome flow already)
-      path !== "/welcome" &&
-      // if the user was invited to a workspace, don't show the welcome page – redirect straight to the workspace
-      !isWorkspaceInvite
-    ) {
-      return NextResponse.redirect(new URL("/welcome", req.url));
+      /* Onboarding redirects
 
-      // if the path is / or /login or /register, redirect to the default workspace
-    } else if (path === "/" || path === "/login" || path === "/register") {
+        - User was created less than a day ago
+        - User is not invited to a workspace (redirect straight to the workspace)
+        - The path does not start with /onboarding
+        - The user has not completed the onboarding step
+      */
+    } else if (
+      new Date(user.createdAt).getTime() > Date.now() - 60 * 60 * 24 * 1000 &&
+      !isWorkspaceInvite &&
+      !["/onboarding", "/account"].some((p) => path.startsWith(p)) &&
+      !(await getDefaultWorkspace(user)) &&
+      (await getOnboardingStep(user)) !== "completed"
+    ) {
+      let step = await getOnboardingStep(user);
+      if (!step) {
+        return NextResponse.redirect(new URL("/onboarding", req.url));
+      } else if (step === "completed") {
+        return WorkspacesMiddleware(req, user);
+      }
+
       const defaultWorkspace = await getDefaultWorkspace(user);
 
       if (defaultWorkspace) {
+        // Skip workspace step if user already has a workspace
+        step = step === "workspace" ? "link" : step;
         return NextResponse.redirect(
-          new URL(`/${defaultWorkspace}${searchParamsString}`, req.url),
+          new URL(`/onboarding/${step}?workspace=${defaultWorkspace}`, req.url),
         );
       } else {
-        return NextResponse.redirect(new URL("/workspaces", req.url));
+        return NextResponse.redirect(new URL("/onboarding", req.url));
       }
+
+      // if the path is / or /login or /register, redirect to the default workspace
+    } else if (
+      [
+        "/",
+        "/login",
+        "/register",
+        "/workspaces",
+        "/links",
+        "/analytics",
+        "/events",
+        "/programs",
+        "/settings",
+        "/upgrade",
+        "/wrapped",
+      ].includes(path) ||
+      path.startsWith("/settings/") ||
+      isTopLevelSettingsRedirect(path)
+    ) {
+      return WorkspacesMiddleware(req, user);
+    } else if (appRedirect(path)) {
+      return NextResponse.redirect(
+        new URL(`${appRedirect(path)}${searchParamsString}`, req.url),
+      );
     }
   }
 

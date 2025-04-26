@@ -1,10 +1,13 @@
 import { getAnalytics } from "@/lib/analytics/get-analytics";
 import { DubApiError } from "@/lib/api/errors";
+import { linkCache } from "@/lib/api/links/cache";
+import { getLinkOrThrow } from "@/lib/api/links/get-link-or-throw";
+import { normalizeWorkspaceId } from "@/lib/api/workspace-id";
 import { withWorkspace } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { verifyFolderAccess } from "@/lib/folder/permissions";
 import { recordLink } from "@/lib/tinybird";
-import { formatRedisLink, redis } from "@/lib/upstash";
 import z from "@/lib/zod";
+import { prisma } from "@dub/prisma";
 import { waitUntil } from "@vercel/functions";
 import { NextResponse } from "next/server";
 
@@ -12,13 +15,26 @@ const transferLinkBodySchema = z.object({
   newWorkspaceId: z
     .string()
     .min(1, "Missing new workspace ID.")
-    // replace "ws_" with "" to get the workspace ID
-    .transform((v) => v.replace("ws_", "")),
+    .transform((v) => normalizeWorkspaceId(v)),
 });
 
 // POST /api/links/[linkId]/transfer – transfer a link to another workspace
 export const POST = withWorkspace(
   async ({ req, headers, session, params, workspace }) => {
+    const link = await getLinkOrThrow({
+      workspaceId: workspace.id,
+      linkId: params.linkId,
+    });
+
+    if (link.folderId) {
+      await verifyFolderAccess({
+        workspace,
+        userId: session.user.id,
+        folderId: link.folderId,
+        requiredPermission: "folders.links.write",
+      });
+    }
+
     const { newWorkspaceId } = transferLinkBodySchema.parse(await req.json());
 
     const newWorkspace = await prisma.project.findUnique({
@@ -36,22 +52,6 @@ export const POST = withWorkspace(
         },
       },
     });
-
-    const link = await prisma.link.findUnique({
-      where: {
-        id: params.linkId,
-      },
-      include: {
-        tags: true,
-      },
-    });
-    // technically this is not needed since the link is already checked in withWorkspace
-    if (!link) {
-      throw new DubApiError({
-        code: "not_found",
-        message: "Link not found.",
-      });
-    }
 
     if (!newWorkspace || newWorkspace.users.length === 0) {
       throw new DubApiError({
@@ -74,7 +74,7 @@ export const POST = withWorkspace(
       interval: "30d",
     });
 
-    const response = await prisma.link.update({
+    const updatedLink = await prisma.link.update({
       where: {
         id: link.id,
       },
@@ -84,40 +84,17 @@ export const POST = withWorkspace(
         tags: {
           deleteMany: {},
         },
+        // remove folder when transferring link
+        folderId: null,
       },
     });
 
     waitUntil(
       Promise.all([
-        redis.hset(link.domain.toLowerCase(), {
-          [link.key.toLowerCase()]: await formatRedisLink({
-            ...link,
-            projectId: newWorkspaceId,
-          }),
-        }),
-        recordLink({
-          link_id: link.id,
-          domain: link.domain,
-          key: link.key,
-          url: link.url,
-          tag_ids: [],
-          workspace_id: newWorkspaceId,
-          created_at: link.createdAt,
-        }),
-        // decrement old workspace usage
-        prisma.project.update({
-          where: {
-            id: workspace.id,
-          },
-          data: {
-            usage: {
-              decrement: linkClicks,
-            },
-            linksUsage: {
-              decrement: 1,
-            },
-          },
-        }),
+        linkCache.set(updatedLink),
+
+        recordLink(updatedLink),
+
         // increment new workspace usage
         prisma.project.update({
           where: {
@@ -132,11 +109,21 @@ export const POST = withWorkspace(
             },
           },
         }),
+
+        // Remove the webhooks associated with the link
+        prisma.linkWebhook.deleteMany({
+          where: {
+            linkId: link.id,
+          },
+        }),
       ]),
     );
 
-    return NextResponse.json(response, {
+    return NextResponse.json(updatedLink, {
       headers,
     });
+  },
+  {
+    requiredPermissions: ["links.write"],
   },
 );

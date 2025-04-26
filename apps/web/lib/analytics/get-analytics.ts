@@ -1,23 +1,19 @@
+import { combineTagIds } from "@/lib/api/tags/combine-tag-ids";
 import { tb } from "@/lib/tinybird";
-import { getDaysDifference, linkConstructor } from "@dub/utils";
+import { UTM_TAGS_PLURAL_LIST } from "@/lib/zod/schemas/utm";
+import { prismaEdge } from "@dub/prisma/edge";
+import { linkConstructor, punyEncode } from "@dub/utils";
+import { decodeKeyIfCaseSensitive } from "../api/links/case-sensitivity";
 import { conn } from "../planetscale";
-import { prismaEdge } from "../prisma/edge";
-import { tbDemo } from "../tinybird/demo-client";
 import z from "../zod";
 import { analyticsFilterTB } from "../zod/schemas/analytics";
-import { clickAnalyticsResponse } from "../zod/schemas/clicks-analytics";
-import { compositeAnalyticsResponse } from "../zod/schemas/composite-analytics";
-import { leadAnalyticsResponse } from "../zod/schemas/leads-analytics";
-import { saleAnalyticsResponse } from "../zod/schemas/sales-analytics";
-import { INTERVAL_DATA } from "./constants";
+import { analyticsResponse } from "../zod/schemas/analytics-response";
+import {
+  DIMENSIONAL_ANALYTICS_FILTERS,
+  SINGULAR_ANALYTICS_ENDPOINTS,
+} from "./constants";
 import { AnalyticsFilters } from "./types";
-
-const responseSchema = {
-  clicks: clickAnalyticsResponse,
-  leads: leadAnalyticsResponse,
-  sales: saleAnalyticsResponse,
-  composite: compositeAnalyticsResponse,
-};
+import { getStartEndDates } from "./utils/get-start-end-dates";
 
 // Fetch data for /api/analytics
 export const getAnalytics = async (params: AnalyticsFilters) => {
@@ -29,73 +25,98 @@ export const getAnalytics = async (params: AnalyticsFilters) => {
     interval,
     start,
     end,
+    qr,
+    trigger,
+    region,
+    country,
     timezone = "UTC",
-    isDemo,
     isDeprecatedClicksEndpoint = false,
+    dataAvailableFrom,
   } = params;
 
-  // get all-time clicks count if:
-  // 1. type is count
-  // 2. linkId is defined
-  // 3. interval is all time
-  // 4. call is made from dashboard
-  if (linkId && groupBy === "count" && interval === "all_unfiltered") {
-    const columns = event === "composite" ? `clicks, leads, sales` : `${event}`;
+  const tagIds = combineTagIds(params);
 
-    let response = await conn.execute(
+  // get all-time clicks count if:
+  // 1. linkId is defined
+  // 2. type is count
+  // 3. interval is all
+  // 4. no custom start or end date is provided
+  // 5. no other dimensional filters are applied
+  if (
+    linkId &&
+    groupBy === "count" &&
+    interval === "all" &&
+    !start &&
+    !end &&
+    DIMENSIONAL_ANALYTICS_FILTERS.every(
+      (filter) => !params[filter as keyof AnalyticsFilters],
+    )
+  ) {
+    const columns =
+      event === "composite"
+        ? `clicks, leads, sales, saleAmount`
+        : event === "sales"
+          ? `sales, saleAmount`
+          : `${event}`;
+
+    const response = await conn.execute(
       `SELECT ${columns} FROM Link WHERE id = ?`,
       [linkId],
     );
 
-    if (response.rows.length === 0 && event === "clicks") {
-      response = await conn.execute(`SELECT clicks FROM Domain WHERE id = ?`, [
-        linkId,
-      ]);
-    }
-
     return response.rows[0];
   }
 
-  let granularity: "minute" | "hour" | "day" | "month" = "day";
+  if (groupBy === "trigger") {
+    groupBy = "triggers";
+  }
 
-  if (start) {
-    start = new Date(start);
-    end = end ? new Date(end) : new Date(Date.now());
+  const { startDate, endDate, granularity } = getStartEndDates({
+    interval,
+    start,
+    end,
+    dataAvailableFrom,
+  });
 
-    const daysDifference = getDaysDifference(start, end);
-
-    if (daysDifference <= 2) {
-      granularity = "hour";
-    } else if (daysDifference > 180) {
-      granularity = "month";
+  if (trigger) {
+    if (trigger === "qr") {
+      qr = true;
+    } else if (trigger === "link") {
+      qr = false;
     }
+  }
 
-    // Swap start and end if start is greater than end
-    if (start > end) {
-      [start, end] = [end, start];
-    }
-  } else {
-    interval = interval ?? "24h";
-    start = INTERVAL_DATA[interval].startDate;
-    end = new Date(Date.now());
-    granularity = INTERVAL_DATA[interval].granularity;
+  if (region) {
+    const split = region.split("-");
+    country = split[0];
+    region = split[1];
   }
 
   // Create a Tinybird pipe
-  const pipe = (isDemo ? tbDemo : tb).buildPipe({
-    pipe: `v1_${groupBy}`,
+  const pipe = tb.buildPipe({
+    pipe: `v2_${UTM_TAGS_PLURAL_LIST.includes(groupBy) ? "utms" : groupBy}`,
     parameters: analyticsFilterTB,
-    data: groupBy === "top_links" ? z.any() : responseSchema[event][groupBy],
+    data:
+      groupBy === "top_links" || UTM_TAGS_PLURAL_LIST.includes(groupBy)
+        ? z.any()
+        : analyticsResponse[groupBy],
   });
 
   const response = await pipe({
     ...params,
+    ...(UTM_TAGS_PLURAL_LIST.includes(groupBy)
+      ? { groupByUtmTag: SINGULAR_ANALYTICS_ENDPOINTS[groupBy] }
+      : {}),
     eventType: event,
     workspaceId,
-    start: start.toISOString().replace("T", " ").replace("Z", ""),
-    end: end.toISOString().replace("T", " ").replace("Z", ""),
+    tagIds,
+    qr,
+    start: startDate.toISOString().replace("T", " ").replace("Z", ""),
+    end: endDate.toISOString().replace("T", " ").replace("Z", ""),
     granularity,
     timezone,
+    country,
+    region,
   });
 
   if (groupBy === "count") {
@@ -110,68 +131,64 @@ export const getAnalytics = async (params: AnalyticsFilters) => {
     const topLinksData = response.data as {
       link: string;
     }[];
-    const linkIds = topLinksData.map((item) => item.link);
 
-    const [links, domains] = await Promise.all([
-      prismaEdge.link.findMany({
-        where: {
-          projectId: workspaceId,
-          id: {
-            in: linkIds,
-          },
+    const links = await prismaEdge.link.findMany({
+      where: {
+        projectId: workspaceId,
+        id: {
+          in: topLinksData.map((item) => item.link),
         },
-        select: {
-          id: true,
-          domain: true,
-          key: true,
-          url: true,
-          createdAt: true,
-        },
-      }),
-      prismaEdge.domain.findMany({
-        where: {
-          projectId: workspaceId,
-          id: {
-            in: linkIds,
-          },
-        },
-        select: {
-          id: true,
-          slug: true,
-          target: true,
-          createdAt: true,
-        },
-      }),
-    ]);
+      },
+      select: {
+        id: true,
+        domain: true,
+        key: true,
+        url: true,
+        comments: true,
+        title: true,
+        createdAt: true,
+      },
+    });
 
-    const allLinks = [
-      ...links.map((link) => ({
-        id: link.id,
-        domain: link.domain,
-        key: link.key,
-        shortLink: linkConstructor({
+    return topLinksData
+      .map((topLink) => {
+        const link = links.find((l) => l.id === topLink.link);
+        if (!link) {
+          return null;
+        }
+
+        link.key = decodeKeyIfCaseSensitive({
           domain: link.domain,
           key: link.key,
-        }),
-        url: link.url,
-        createdAt: link.createdAt,
-      })),
-      ...domains.map((domain) => ({
-        id: domain.id,
-        domain: domain.slug,
-        key: "",
-        shortLink: linkConstructor({
-          domain: domain.slug,
-        }),
-        url: domain.target || "",
-        createdAt: domain.createdAt,
-      })),
-    ];
+        });
 
-    return topLinksData.map((d) => ({
-      ...allLinks.find((l) => l.id === d.link),
-      ...d,
-    }));
+        return analyticsResponse[groupBy].parse({
+          id: link.id,
+          domain: link.domain,
+          key: punyEncode(link.key),
+          url: link.url,
+          shortLink: linkConstructor({
+            domain: link.domain,
+            key: punyEncode(link.key),
+          }),
+          comments: link.comments,
+          title: link.title || null,
+          createdAt: link.createdAt.toISOString(),
+          ...topLink,
+        });
+      })
+      .filter((d) => d !== null);
+
+    // special case for utm tags
+  } else if (UTM_TAGS_PLURAL_LIST.includes(groupBy)) {
+    const schema = analyticsResponse[groupBy];
+
+    return response.data.map((item) =>
+      schema.parse({
+        ...item,
+        [SINGULAR_ANALYTICS_ENDPOINTS[groupBy]]: item.utm,
+      }),
+    );
   }
 
   // Return array for other endpoints

@@ -1,20 +1,19 @@
-import {
-  DubApiError,
-  exceededLimitError,
-  handleAndReturnErrorResponse,
-} from "@/lib/api/errors";
-import { prisma } from "@/lib/prisma";
-import { PlanProps, WorkspaceProps } from "@/lib/types";
+import { DubApiError, handleAndReturnErrorResponse } from "@/lib/api/errors";
+import { BetaFeatures, PlanProps, WorkspaceWithUsers } from "@/lib/types";
 import { ratelimit } from "@/lib/upstash";
-import {
-  API_DOMAIN,
-  DUB_WORKSPACE_ID,
-  getSearchParams,
-  isDubDomain,
-} from "@dub/utils";
-import { Link as LinkProps } from "@prisma/client";
+import { prisma } from "@dub/prisma";
+import { API_DOMAIN, getSearchParams } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
-import { isBetaTester } from "../edge-config";
+import { AxiomRequest, withAxiom } from "next-axiom";
+import {
+  PermissionAction,
+  getPermissionsByRole,
+} from "../api/rbac/permissions";
+import { throwIfNoAccess } from "../api/tokens/permissions";
+import { Scope, mapScopesToPermissions } from "../api/tokens/scopes";
+import { normalizeWorkspaceId } from "../api/workspace-id";
+import { getFeatureFlags } from "../edge-config";
+import { logConversionEvent } from "../tinybird/log-conversion-events";
 import { hashToken } from "./hash-token";
 import { Session, getSession } from "./utils";
 
@@ -26,17 +25,15 @@ interface WithWorkspaceHandler {
     headers,
     session,
     workspace,
-    domain,
-    link,
+    permissions,
   }: {
     req: Request;
     params: Record<string, string>;
     searchParams: Record<string, string>;
     headers?: Record<string, string>;
     session: Session;
-    workspace: WorkspaceProps;
-    domain: string;
-    link?: LinkProps;
+    permissions: PermissionAction[];
+    workspace: WorkspaceWithUsers;
   }): Promise<Response>;
 }
 
@@ -50,164 +47,211 @@ export const withWorkspace = (
       "business plus",
       "business max",
       "business extra",
+      "advanced",
       "enterprise",
     ], // if the action needs a specific plan
-    requiredRole = ["owner", "member"],
-    needNotExceededClicks, // if the action needs the user to not have exceeded their clicks usage
-    needNotExceededLinks, // if the action needs the user to not have exceeded their links usage
-    allowAnonymous, // special case for /api/links (POST /api/links) – allow no session
-    allowSelf, // special case for removing yourself from a workspace
-    skipLinkChecks, // special case for /api/links/exists – skip link checks
-    domainChecks, // if the action needs to check if the domain belongs to the workspace
-    betaFeature, // if the action is a beta feature
+    featureFlag, // if the action needs a specific feature flag
+    requiredPermissions = [],
+    skipPermissionChecks, // if the action doesn't need to check for required permission(s)
   }: {
     requiredPlan?: Array<PlanProps>;
-    requiredRole?: Array<"owner" | "member">;
-    needNotExceededClicks?: boolean;
-    needNotExceededLinks?: boolean;
-    allowAnonymous?: boolean;
-    allowSelf?: boolean;
-    skipLinkChecks?: boolean;
-    domainChecks?: boolean;
-    betaFeature?: boolean;
+    featureFlag?: BetaFeatures;
+    requiredPermissions?: PermissionAction[];
+    skipPermissionChecks?: boolean;
   } = {},
 ) => {
-  return async (
-    req: Request,
-    { params = {} }: { params: Record<string, string> | undefined },
-  ) => {
-    const searchParams = getSearchParams(req.url);
+  return withAxiom(
+    async (
+      req: AxiomRequest,
+      { params = {} }: { params: Record<string, string> | undefined },
+    ) => {
+      const searchParams = getSearchParams(req.url);
 
-    let apiKey: string | undefined = undefined;
-    let headers = {};
+      let apiKey: string | undefined = undefined;
+      let headers = {};
+      let workspace: WorkspaceWithUsers | undefined;
 
-    try {
-      const authorizationHeader = req.headers.get("Authorization");
-      if (authorizationHeader) {
-        if (!authorizationHeader.includes("Bearer ")) {
-          throw new DubApiError({
-            code: "bad_request",
-            message:
-              "Misconfigured authorization header. Did you forget to add 'Bearer '? Learn more: https://d.to/auth",
-          });
-        }
-        apiKey = authorizationHeader.replace("Bearer ", "");
-      }
-
-      const domain = params?.domain || searchParams.domain;
-      const key = searchParams.key;
-      const linkId =
-        params?.linkId ||
-        searchParams.linkId ||
-        searchParams.externalId ||
-        undefined;
-
-      let session: Session | undefined;
-      let workspaceId: string | undefined;
-      let workspaceSlug: string | undefined;
-
-      const idOrSlug =
-        params?.idOrSlug ||
-        searchParams.workspaceId ||
-        params?.slug ||
-        searchParams.projectSlug;
-
-      // if there's no workspace ID or slug
-      if (!idOrSlug) {
-        // for /api/links (POST /api/links) – allow no session (but warn if user provides apiKey)
-        if (allowAnonymous && !apiKey) {
-          // @ts-expect-error
-          return await handler({
-            req,
-            params,
-            searchParams,
-            headers,
-          });
-        } else {
-          throw new DubApiError({
-            code: "not_found",
-            message:
-              "Workspace id not found. Did you forget to include a `workspaceId` query parameter? Learn more: https://d.to/id",
-          });
-        }
-      }
-
-      if (idOrSlug.startsWith("ws_")) {
-        workspaceId = idOrSlug.replace("ws_", "");
-      } else {
-        workspaceSlug = idOrSlug;
-      }
-
-      if (apiKey) {
-        const hashedKey = await hashToken(apiKey);
-
-        const user = await prisma.user.findFirst({
-          where: {
-            tokens: {
-              some: {
-                hashedKey,
-              },
-            },
-          },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        });
-        if (!user) {
-          throw new DubApiError({
-            code: "unauthorized",
-            message: "Unauthorized: Invalid API key.",
-          });
+      try {
+        const authorizationHeader = req.headers.get("Authorization");
+        if (authorizationHeader) {
+          if (!authorizationHeader.includes("Bearer ")) {
+            throw new DubApiError({
+              code: "bad_request",
+              message:
+                "Misconfigured authorization header. Did you forget to add 'Bearer '? Learn more: https://d.to/auth",
+            });
+          }
+          apiKey = authorizationHeader.replace("Bearer ", "");
         }
 
-        const { success, limit, reset, remaining } = await ratelimit(
-          600,
-          "1 m",
-        ).limit(apiKey);
-        headers = {
-          "Retry-After": reset.toString(),
-          "X-RateLimit-Limit": limit.toString(),
-          "X-RateLimit-Remaining": remaining.toString(),
-          "X-RateLimit-Reset": reset.toString(),
-        };
+        let session: Session | undefined;
+        let workspaceId: string | undefined;
+        let workspaceSlug: string | undefined;
+        let permissions: PermissionAction[] = [];
+        let token: any | null = null;
+        const isRestrictedToken = apiKey?.startsWith("dub_");
 
-        if (!success) {
-          throw new DubApiError({
-            code: "rate_limit_exceeded",
-            message: "Too many requests.",
-          });
+        const idOrSlug =
+          params?.idOrSlug ||
+          searchParams.workspaceId ||
+          params?.slug ||
+          searchParams.projectSlug;
+
+        /*
+          if there's no workspace ID or slug and it's not a restricted token:
+          - special case for anonymous link creation
+          - missing authorization header
+          - user is still using personal API keys
+        */
+        if (!idOrSlug && !isRestrictedToken) {
+          // special case for anonymous link creation
+          if (
+            req.headers.has("dub-anonymous-link-creation") &&
+            ["/links", "/api/links"].includes(req.nextUrl.pathname)
+          ) {
+            // @ts-expect-error
+            return await handler({
+              req,
+              params,
+              searchParams,
+              headers,
+            });
+            // missing authorization header
+          } else if (!authorizationHeader) {
+            throw new DubApiError({
+              code: "unauthorized",
+              message: "Missing Authorization header.",
+            });
+            // in case user is still using personal API keys
+          } else {
+            throw new DubApiError({
+              code: "not_found",
+              message:
+                "Workspace ID not found. Did you forget to include a `workspaceId` query parameter? It looks like you might be using personal API keys, we also recommend refactoring to workspace API keys: https://d.to/keys",
+            });
+          }
         }
-        waitUntil(
-          prisma.token.update({
+
+        if (idOrSlug) {
+          if (idOrSlug.startsWith("ws_")) {
+            workspaceId = normalizeWorkspaceId(idOrSlug);
+          } else {
+            workspaceSlug = idOrSlug;
+          }
+        }
+
+        if (apiKey) {
+          const hashedKey = await hashToken(apiKey);
+          const prismaArgs = {
             where: {
               hashedKey,
             },
-            data: {
-              lastUsed: new Date(),
+            select: {
+              ...(isRestrictedToken && {
+                scopes: true,
+                rateLimit: true,
+                projectId: true,
+                expires: true,
+                installationId: true,
+              }),
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  isMachine: true,
+                },
+              },
             },
-          }),
-        );
-        session = {
-          user: {
-            id: user.id,
-            name: user.name || "",
-            email: user.email || "",
-          },
-        };
-      } else {
-        session = await getSession();
-        if (!session?.user?.id) {
-          throw new DubApiError({
-            code: "unauthorized",
-            message: "Unauthorized: Login required.",
-          });
-        }
-      }
+          };
 
-      let [workspace, link] = (await Promise.all([
-        prisma.project.findUnique({
+          if (isRestrictedToken) {
+            token = await prisma.restrictedToken.findUnique(prismaArgs);
+          } else {
+            token = await prisma.token.findUnique(prismaArgs);
+          }
+
+          if (!token || !token.user) {
+            throw new DubApiError({
+              code: "unauthorized",
+              message: "Unauthorized: Invalid API key.",
+            });
+          }
+
+          if (token.expires && token.expires < new Date()) {
+            throw new DubApiError({
+              code: "unauthorized",
+              message: "Unauthorized: Access token expired.",
+            });
+          }
+
+          // Rate limit checks for API keys
+          const rateLimit = token.rateLimit || 600;
+
+          const { success, limit, reset, remaining } = await ratelimit(
+            rateLimit,
+            "1 m",
+          ).limit(apiKey);
+
+          headers = {
+            "Retry-After": reset.toString(),
+            "X-RateLimit-Limit": limit.toString(),
+            "X-RateLimit-Remaining": remaining.toString(),
+            "X-RateLimit-Reset": reset.toString(),
+          };
+
+          if (!success) {
+            throw new DubApiError({
+              code: "rate_limit_exceeded",
+              message: "Too many requests.",
+            });
+          }
+
+          // Find workspaceId if it's a restricted token
+          if (isRestrictedToken) {
+            workspaceId = token.projectId;
+          }
+
+          waitUntil(
+            // update last used time for the token
+            (async () => {
+              const prismaArgs = {
+                where: {
+                  hashedKey,
+                },
+                data: {
+                  lastUsed: new Date(),
+                },
+              };
+
+              if (isRestrictedToken) {
+                await prisma.restrictedToken.update(prismaArgs);
+              } else {
+                await prisma.token.update(prismaArgs);
+              }
+            })(),
+          );
+
+          session = {
+            user: {
+              id: token.user.id,
+              name: token.user.name || "",
+              email: token.user.email || "",
+              isMachine: token.user.isMachine,
+            },
+          };
+        } else {
+          session = await getSession();
+
+          if (!session?.user?.id) {
+            throw new DubApiError({
+              code: "unauthorized",
+              message: "Unauthorized: Login required.",
+            });
+          }
+        }
+
+        workspace = (await prisma.project.findUnique({
           where: {
             id: workspaceId || undefined,
             slug: workspaceSlug || undefined,
@@ -219,230 +263,159 @@ export const withWorkspace = (
               },
               select: {
                 role: true,
-              },
-            },
-            domains: {
-              select: {
-                slug: true,
-                primary: true,
+                defaultFolderId: true,
+                workspacePreferences: !apiKey, // Hide from API
               },
             },
           },
-        }),
-        linkId
-          ? prisma.link.findUnique({
-              where: {
-                ...(linkId.startsWith("ext_") && workspaceId
-                  ? {
-                      projectId_externalId: {
-                        projectId: workspaceId,
-                        externalId: linkId.replace("ext_", ""),
-                      },
-                    }
-                  : { id: linkId }),
-              },
-            })
-          : domain &&
-            key &&
-            (key === "_root"
-              ? prisma.domain.findUnique({
-                  where: {
-                    slug: domain,
-                  },
-                })
-              : prisma.link.findUnique({
-                  where: {
-                    domain_key: {
-                      domain,
-                      key,
-                    },
-                  },
-                })),
-      ])) as [WorkspaceProps, LinkProps | undefined];
+        })) as WorkspaceWithUsers;
 
-      if (!workspace || !workspace.users) {
         // workspace doesn't exist
-        throw new DubApiError({
-          code: "not_found",
-          message: "Workspace not found.",
-        });
-      }
-
-      // beta feature checks
-      if (betaFeature) {
-        const betaTester = await isBetaTester(workspace.id);
-        if (!betaTester) {
-          throw new DubApiError({
-            code: "forbidden",
-            message: "Unauthorized: Beta feature.",
-          });
-        }
-      }
-
-      // edge case where linkId is an externalId and workspaceId was not provided (they must've used projectSlug instead)
-      // in this case, we need to try fetching the link again
-      if (linkId && linkId.startsWith("ext_") && !link && !workspaceId) {
-        link = (await prisma.link.findUnique({
-          where: {
-            projectId_externalId: {
-              projectId: workspace.id,
-              externalId: linkId.replace("ext_", ""),
-            },
-          },
-        })) as LinkProps;
-      }
-
-      // if domain is defined:
-      // - it's a dub domain and domainChecks is required, check if the user is part of the dub workspace
-      // - it's a custom domain, check if the domain belongs to the workspace
-      if (domain) {
-        if (isDubDomain(domain)) {
-          if (domainChecks && workspace.id !== DUB_WORKSPACE_ID) {
-            throw new DubApiError({
-              code: "forbidden",
-              message: "Domain does not belong to workspace.",
-            });
-          }
-        } else if (!workspace.domains.find((d) => d.slug === domain)) {
-          throw new DubApiError({
-            code: "forbidden",
-            message: "Domain does not belong to workspace.",
-          });
-        }
-      }
-
-      // workspace exists but user is not part of it
-      if (workspace.users.length === 0) {
-        const pendingInvites = await prisma.projectInvite.findUnique({
-          where: {
-            email_projectId: {
-              email: session.user.email,
-              projectId: workspace.id,
-            },
-          },
-          select: {
-            expires: true,
-          },
-        });
-        if (!pendingInvites) {
+        if (!workspace || !workspace.users) {
           throw new DubApiError({
             code: "not_found",
             message: "Workspace not found.",
           });
-        } else if (pendingInvites.expires < new Date()) {
-          throw new DubApiError({
-            code: "invite_expired",
-            message: "Workspace invite expired.",
-          });
-        } else {
-          throw new DubApiError({
-            code: "invite_pending",
-            message: "Workspace invite pending.",
-          });
         }
-      }
 
-      // workspace role checks
-      if (
-        !requiredRole.includes(workspace.users[0].role) &&
-        !(allowSelf && searchParams.userId === session.user.id)
-      ) {
-        throw new DubApiError({
-          code: "forbidden",
-          message: "Unauthorized: Insufficient permissions.",
-        });
-      }
-
-      // clicks usage overage checks
-      if (needNotExceededClicks && workspace.usage > workspace.usageLimit) {
-        throw new DubApiError({
-          code: "forbidden",
-          message: exceededLimitError({
-            plan: workspace.plan,
-            limit: workspace.usageLimit,
-            type: "clicks",
-          }),
-        });
-      }
-
-      // links usage overage checks
-      if (
-        needNotExceededLinks &&
-        workspace.linksUsage > workspace.linksLimit &&
-        (workspace.plan === "free" || workspace.plan === "pro")
-      ) {
-        throw new DubApiError({
-          code: "forbidden",
-          message: exceededLimitError({
-            plan: workspace.plan,
-            limit: workspace.linksLimit,
-            type: "links",
-          }),
-        });
-      }
-
-      // plan checks
-      if (!requiredPlan.includes(workspace.plan)) {
-        throw new DubApiError({
-          code: "forbidden",
-          message: "Unauthorized: Need higher plan.",
-        });
-      }
-
-      // analytics API checks
-      const url = new URL(req.url || "", API_DOMAIN);
-      if (
-        workspace.plan === "free" &&
-        apiKey &&
-        url.pathname.includes("/analytics")
-      ) {
-        throw new DubApiError({
-          code: "forbidden",
-          message: "Analytics API is only available on paid plans.",
-        });
-      }
-
-      // link checks (if linkId or domain and key are provided)
-      if ((linkId || (domain && key && key !== "_root")) && !skipLinkChecks) {
-        // special case for getting domain by ID
-        // TODO: refactor domains to use the same logic as links
-        if (!link && searchParams.checkDomain === "true") {
-          const domain = await prisma.domain.findUnique({
+        // workspace exists but user is not part of it
+        if (workspace.users.length === 0) {
+          const pendingInvites = await prisma.projectInvite.findUnique({
             where: {
-              id: linkId,
+              email_projectId: {
+                email: session.user.email,
+                projectId: workspace.id,
+              },
+            },
+            select: {
+              expires: true,
             },
           });
-          if (domain) {
-            link = {
-              ...domain,
-              domain: domain.slug,
-              key: "_root",
-              url: domain.target || "",
-            } as unknown as LinkProps;
+
+          if (!pendingInvites) {
+            throw new DubApiError({
+              code: "not_found",
+              message: "Workspace not found.",
+            });
+          } else if (pendingInvites.expires < new Date()) {
+            throw new DubApiError({
+              code: "invite_expired",
+              message: "Workspace invite expired.",
+            });
+          } else {
+            throw new DubApiError({
+              code: "invite_pending",
+              message: "Workspace invite pending.",
+            });
           }
         }
 
-        // make sure the link is owned by the workspace
-        if (!link || link.projectId !== workspace?.id) {
-          throw new DubApiError({
-            code: "not_found",
-            message: "Link not found.",
+        // Machine users have owner role by default
+        // Only workspace owners can create machine users
+        if (session.user.isMachine) {
+          workspace.users[0].role = "owner";
+        }
+
+        permissions = getPermissionsByRole(workspace.users[0].role);
+
+        // Find the subset of permissions that the user has access to based on the token scopes
+        if (isRestrictedToken) {
+          const tokenScopes: Scope[] = token.scopes.split(" ") || [];
+          permissions = mapScopesToPermissions(tokenScopes).filter((p) =>
+            permissions.includes(p),
+          );
+
+          // Prevent integration tokens from accessing API endpoints without explicit permissions
+          if (token.installationId && requiredPermissions.length === 0) {
+            throw new DubApiError({
+              code: "forbidden",
+              message:
+                "You don't have the necessary permissions to complete this request.",
+            });
+          }
+        }
+
+        // Check user has permission to make the action
+        if (!skipPermissionChecks) {
+          throwIfNoAccess({
+            permissions,
+            requiredPermissions,
+            workspaceId: workspace.id,
+            externalRequest: Boolean(apiKey),
           });
         }
-      }
 
-      return await handler({
-        req,
-        params,
-        searchParams,
-        headers,
-        session,
-        workspace,
-        domain,
-        link,
-      });
-    } catch (error) {
-      return handleAndReturnErrorResponse(error, headers);
-    }
-  };
+        // beta feature checks
+        if (featureFlag) {
+          let flags = await getFeatureFlags({
+            workspaceId: workspace.id,
+          });
+
+          // TODO: Remove this once Folders goes GA
+          flags = {
+            ...flags,
+            linkFolders: flags.linkFolders || workspace.partnersEnabled,
+          };
+
+          if (!flags[featureFlag]) {
+            throw new DubApiError({
+              code: "forbidden",
+              message: "Unauthorized: Beta feature.",
+            });
+          }
+        }
+
+        const url = new URL(req.url || "", API_DOMAIN);
+
+        // plan checks
+        if (!requiredPlan.includes(workspace.plan)) {
+          throw new DubApiError({
+            code: "forbidden",
+            message: "Unauthorized: Need higher plan.",
+          });
+        }
+
+        // analytics API checks
+        if (
+          workspace.plan === "free" &&
+          apiKey &&
+          url.pathname.includes("/analytics")
+        ) {
+          throw new DubApiError({
+            code: "forbidden",
+            message: "Analytics API is only available on paid plans.",
+          });
+        }
+
+        return await handler({
+          req,
+          params,
+          searchParams,
+          headers,
+          session,
+          workspace,
+          permissions,
+        });
+      } catch (error) {
+        req.log.error(error);
+
+        // Log the conversion events for debugging purposes
+        waitUntil(
+          (async () => {
+            const paths = ["/track/lead", "/track/sale"];
+
+            if (workspace && paths.includes(req.nextUrl.pathname)) {
+              logConversionEvent({
+                workspace_id: workspace.id,
+                path: req.nextUrl.pathname,
+                error: error.message,
+              });
+            }
+          })(),
+        );
+
+        return handleAndReturnErrorResponse(error, headers);
+      }
+    },
+  );
 };

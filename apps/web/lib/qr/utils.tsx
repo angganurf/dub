@@ -3,11 +3,10 @@ import {
   DEFAULT_BGCOLOR,
   DEFAULT_FGCOLOR,
   DEFAULT_IMG_SCALE,
-  DEFAULT_INCLUDEMARGIN,
   DEFAULT_LEVEL,
+  DEFAULT_MARGIN,
   DEFAULT_SIZE,
   ERROR_LEVEL_MAP,
-  MARGIN_SIZE,
 } from "./constants";
 import { Excavation, ImageSettings, Modules, QRPropsSVG } from "./types";
 
@@ -77,7 +76,7 @@ export function generatePath(modules: Modules, margin = 0): string {
 export function getImageSettings(
   cells: Modules,
   size: number,
-  includeMargin: boolean,
+  margin: number,
   imageSettings?: ImageSettings,
 ): null | {
   x: number;
@@ -89,20 +88,18 @@ export function getImageSettings(
   if (imageSettings == null) {
     return null;
   }
-  const margin = includeMargin ? MARGIN_SIZE : 0;
-  const numCells = cells.length + margin * 2;
+
+  const qrCodeSize = cells.length;
   const defaultSize = Math.floor(size * DEFAULT_IMG_SCALE);
-  const scale = numCells / size;
+  const scale = qrCodeSize / size;
   const w = (imageSettings.width || defaultSize) * scale;
   const h = (imageSettings.height || defaultSize) * scale;
+
+  // Center the image in the QR code area (without margins)
   const x =
-    imageSettings.x == null
-      ? cells.length / 2 - w / 2
-      : imageSettings.x * scale;
+    imageSettings.x == null ? qrCodeSize / 2 - w / 2 : imageSettings.x * scale;
   const y =
-    imageSettings.y == null
-      ? cells.length / 2 - h / 2
-      : imageSettings.y * scale;
+    imageSettings.y == null ? qrCodeSize / 2 - h / 2 : imageSettings.y * scale;
 
   let excavation: Excavation | null = null;
   if (imageSettings.excavate) {
@@ -116,6 +113,27 @@ export function getImageSettings(
   return { x, y, h, w, excavation };
 }
 
+export function convertImageSettingsToPixels(
+  calculatedImageSettings: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    excavation: Excavation | null;
+  },
+  size: number,
+  numCells: number,
+  margin: number,
+) {
+  const pixelRatio = size / numCells;
+  const imgWidth = calculatedImageSettings.w * pixelRatio;
+  const imgHeight = calculatedImageSettings.h * pixelRatio;
+  const imgLeft = (calculatedImageSettings.x + margin) * pixelRatio;
+  const imgTop = (calculatedImageSettings.y + margin) * pixelRatio;
+
+  return { imgWidth, imgHeight, imgLeft, imgTop };
+}
+
 export function QRCodeSVG(props: QRPropsSVG) {
   const {
     value,
@@ -123,22 +141,29 @@ export function QRCodeSVG(props: QRPropsSVG) {
     level = DEFAULT_LEVEL,
     bgColor = DEFAULT_BGCOLOR,
     fgColor = DEFAULT_FGCOLOR,
-    includeMargin = DEFAULT_INCLUDEMARGIN,
+    margin = DEFAULT_MARGIN,
+    isOGContext = false,
     imageSettings,
     ...otherProps
   } = props;
 
+  const shouldUseHigherErrorLevel =
+    isOGContext && imageSettings?.excavate && (level === "L" || level === "M");
+
+  // Use a higher error correction level 'Q' when excavation is enabled
+  // to ensure the QR code remains scannable despite the removed modules.
+  const effectiveLevel = shouldUseHigherErrorLevel ? "Q" : level;
+
   let cells = qrcodegen.QrCode.encodeText(
     value,
-    ERROR_LEVEL_MAP[level],
+    ERROR_LEVEL_MAP[effectiveLevel],
   ).getModules();
 
-  const margin = includeMargin ? MARGIN_SIZE : 0;
   const numCells = cells.length + margin * 2;
   const calculatedImageSettings = getImageSettings(
     cells,
     size,
-    includeMargin,
+    margin,
     imageSettings,
   );
 
@@ -148,16 +173,40 @@ export function QRCodeSVG(props: QRPropsSVG) {
       cells = excavateModules(cells, calculatedImageSettings.excavation);
     }
 
-    image = (
-      <image
-        href={imageSettings.src}
-        height={calculatedImageSettings.h}
-        width={calculatedImageSettings.w}
-        x={calculatedImageSettings.x + margin}
-        y={calculatedImageSettings.y + margin}
-        preserveAspectRatio="none"
-      />
-    );
+    if (isOGContext) {
+      const { imgWidth, imgHeight, imgLeft, imgTop } =
+        convertImageSettingsToPixels(
+          calculatedImageSettings,
+          size,
+          numCells,
+          margin,
+        );
+
+      image = (
+        <img
+          src={imageSettings.src}
+          alt="Logo"
+          style={{
+            position: "absolute",
+            left: `${imgLeft}px`,
+            top: `${imgTop}px`,
+            width: `${imgWidth}px`,
+            height: `${imgHeight}px`,
+          }}
+        />
+      );
+    } else {
+      image = (
+        <image
+          href={imageSettings.src}
+          height={calculatedImageSettings.h}
+          width={calculatedImageSettings.w}
+          x={calculatedImageSettings.x + margin}
+          y={calculatedImageSettings.y + margin}
+          preserveAspectRatio="none"
+        />
+      );
+    }
   }
 
   // Drawing strategy: instead of a rect per module, we're going to create a

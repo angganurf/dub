@@ -1,59 +1,85 @@
 import { DubApiError } from "@/lib/api/errors";
+import { parseRequestBody } from "@/lib/api/utils";
+import { validateAllowedHostnames } from "@/lib/api/validate-allowed-hostnames";
+import { prefixWorkspaceId } from "@/lib/api/workspace-id";
 import { deleteWorkspace } from "@/lib/api/workspaces";
 import { withWorkspace } from "@/lib/auth";
-import { isBetaTester, isReservedKey } from "@/lib/edge-config";
-import { prisma } from "@/lib/prisma";
-import z from "@/lib/zod";
-import { WorkspaceSchema } from "@/lib/zod/schemas/workspaces";
-import { DEFAULT_REDIRECTS, trim, validSlugRegex } from "@dub/utils";
-import slugify from "@sindresorhus/slugify";
+import { getFeatureFlags } from "@/lib/edge-config";
+import { storage } from "@/lib/storage";
+import {
+  updateWorkspaceSchema,
+  WorkspaceSchema,
+  WorkspaceSchemaExtended,
+} from "@/lib/zod/schemas/workspaces";
+import { prisma } from "@dub/prisma";
+import { nanoid, R2_URL } from "@dub/utils";
+import { waitUntil } from "@vercel/functions";
 import { NextResponse } from "next/server";
 
-const updateWorkspaceSchema = z.object({
-  name: z.preprocess(trim, z.string().min(1).max(32)).optional(),
-  slug: z
-    .preprocess(
-      trim,
-      z
-        .string()
-        .min(3, "Slug must be at least 3 characters")
-        .max(48, "Slug must be less than 48 characters")
-        .transform((v) => slugify(v))
-        .refine((v) => validSlugRegex.test(v), {
-          message: "Invalid slug format",
-        })
-        .refine(
-          async (v) => !((await isReservedKey(v)) || DEFAULT_REDIRECTS[v]),
-          {
-            message: "Cannot use reserved slugs",
-          },
-        ),
-    )
-    .optional(),
-});
-
 // GET /api/workspaces/[idOrSlug] – get a specific workspace by id or slug
-export const GET = withWorkspace(async ({ workspace, headers }) => {
-  const betaTester = await isBetaTester(workspace.id);
+export const GET = withWorkspace(
+  async ({ workspace, headers }) => {
+    const domains = await prisma.domain.findMany({
+      where: {
+        projectId: workspace.id,
+      },
+      select: {
+        slug: true,
+        primary: true,
+      },
+      take: 100,
+    });
 
-  return NextResponse.json(
-    WorkspaceSchema.parse({
-      ...workspace,
-      id: `ws_${workspace.id}`,
-      betaTester,
-    }),
-    { headers },
-  );
-});
+    const flags = await getFeatureFlags({
+      workspaceId: workspace.id,
+    });
+
+    return NextResponse.json(
+      {
+        ...WorkspaceSchemaExtended.parse({
+          ...workspace,
+          id: prefixWorkspaceId(workspace.id),
+          domains,
+          // TODO: Remove this once Folders goes GA
+          flags: {
+            ...flags,
+            linkFolders: flags.linkFolders || workspace.partnersEnabled,
+          },
+        }),
+      },
+      { headers },
+    );
+  },
+  {
+    requiredPermissions: ["workspaces.read"],
+  },
+);
 
 // PATCH /api/workspaces/[idOrSlug] – update a specific workspace by id or slug
 export const PATCH = withWorkspace(
   async ({ req, workspace }) => {
-    try {
-      const { name, slug } = await updateWorkspaceSchema.parseAsync(
-        await req.json(),
-      );
+    const { name, slug, logo, conversionEnabled, allowedHostnames } =
+      await updateWorkspaceSchema.parseAsync(await parseRequestBody(req));
 
+    if (["free", "pro"].includes(workspace.plan) && conversionEnabled) {
+      throw new DubApiError({
+        code: "forbidden",
+        message: "Conversion tracking is not available on free or pro plans.",
+      });
+    }
+
+    const validHostnames = allowedHostnames
+      ? validateAllowedHostnames(allowedHostnames)
+      : undefined;
+
+    const logoUploaded = logo
+      ? await storage.upload(
+          `workspaces/${prefixWorkspaceId(workspace.id)}/logo_${nanoid(7)}`,
+          logo,
+        )
+      : null;
+
+    try {
       const response = await prisma.project.update({
         where: {
           slug: workspace.slug,
@@ -61,6 +87,15 @@ export const PATCH = withWorkspace(
         data: {
           ...(name && { name }),
           ...(slug && { slug }),
+          ...(logoUploaded && { logo: logoUploaded.url }),
+          ...(conversionEnabled !== undefined && { conversionEnabled }),
+          ...(validHostnames !== undefined && {
+            allowedHostnames: validHostnames,
+          }),
+        },
+        include: {
+          domains: true,
+          users: true,
         },
       });
 
@@ -75,20 +110,35 @@ export const PATCH = withWorkspace(
         });
       }
 
-      return NextResponse.json(response);
+      if (logoUploaded && workspace.logo) {
+        waitUntil(storage.delete(workspace.logo.replace(`${R2_URL}/`, "")));
+      }
+
+      return NextResponse.json(
+        WorkspaceSchema.parse({
+          ...response,
+          id: prefixWorkspaceId(response.id),
+          flags: await getFeatureFlags({
+            workspaceId: response.id,
+          }),
+        }),
+      );
     } catch (error) {
       if (error.code === "P2002") {
         throw new DubApiError({
           code: "conflict",
-          message: "Workspace slug already exists.",
+          message: `The slug "${slug}" is already in use.`,
+        });
+      } else {
+        throw new DubApiError({
+          code: "internal_server_error",
+          message: error.message,
         });
       }
-
-      throw error;
     }
   },
   {
-    requiredRole: ["owner"],
+    requiredPermissions: ["workspaces.write"],
   },
 );
 
@@ -102,6 +152,6 @@ export const DELETE = withWorkspace(
     return NextResponse.json(workspace);
   },
   {
-    requiredRole: ["owner"],
+    requiredPermissions: ["workspaces.write"],
   },
 );

@@ -1,10 +1,11 @@
-import { fetchWithTimeout } from "@dub/utils";
+import { OG_AVATAR_URL, R2_URL, fetchWithTimeout } from "@dub/utils";
 import { AwsClient } from "aws4fetch";
 
 interface imageOptions {
   contentType?: string;
   width?: number;
   height?: number;
+  headers?: Record<string, string>;
 }
 
 class StorageClient {
@@ -35,6 +36,7 @@ class StorageClient {
 
     const headers = {
       "Content-Length": uploadBody.size.toString(),
+      ...opts?.headers,
     };
     if (opts?.contentType) headers["Content-Type"] = opts.contentType;
 
@@ -46,11 +48,16 @@ class StorageClient {
       });
 
       return {
-        url: `${process.env.STORAGE_BASE_URL}/${key}`,
+        url: `${R2_URL}/${key}`,
       };
     } catch (error) {
+      console.error("Image upload failed", error);
       throw new Error(`Failed to upload file: ${error.message}`);
     }
+  }
+
+  async fetch(key: string) {
+    return this.client.fetch(`${process.env.STORAGE_ENDPOINT}/${key}`);
   }
 
   async delete(key: string) {
@@ -59,6 +66,23 @@ class StorageClient {
     });
 
     return { success: true };
+  }
+
+  async getSignedUrl(key: string) {
+    const url = new URL(`${process.env.STORAGE_ENDPOINT}/${key}`);
+
+    // 10 minutes expiration
+    url.searchParams.set("X-Amz-Expires", "600");
+
+    const signed = await this.client.sign(url, {
+      method: "PUT",
+      aws: {
+        signQuery: true,
+        allHeaders: true,
+      },
+    });
+
+    return signed.url;
   }
 
   private base64ToArrayBuffer(base64: string, opts?: imageOptions) {
@@ -78,9 +102,14 @@ class StorageClient {
     return new Blob([byteArray], blobProps);
   }
 
-  private isBase64(str: string): boolean {
-    const regex = /^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,([^\s]*)$/;
-    return regex.test(str);
+  private isBase64(str: string) {
+    const base64Regex =
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+    const dataImageRegex =
+      /^data:image\/[a-zA-Z0-9.+-]+;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+    return base64Regex.test(str) || dataImageRegex.test(str);
   }
 
   private isUrl(str: string): boolean {
@@ -122,5 +151,5 @@ class StorageClient {
 export const storage = new StorageClient();
 
 export const isStored = (url: string) => {
-  return url.startsWith(process.env.STORAGE_BASE_URL || "");
+  return url.startsWith(R2_URL) || url.startsWith(OG_AVATAR_URL);
 };

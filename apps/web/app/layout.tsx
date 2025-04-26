@@ -1,11 +1,8 @@
-import { inter, satoshi } from "@/styles/fonts";
+import { geistMono, inter, satoshi } from "@/styles/fonts";
 import "@/styles/globals.css";
-import { Analytics as DubAnalytics } from "@dub/analytics/react";
-import { TooltipProvider } from "@dub/ui/src/tooltip";
 import { cn, constructMetadata } from "@dub/utils";
-import { Analytics as VercelAnalytics } from "@vercel/analytics/react";
-import { SpeedInsights } from "@vercel/speed-insights/next";
-import { Toaster } from "sonner";
+import Script from "next/script";
+import RootProviders from "./providers";
 
 export const metadata = constructMetadata();
 
@@ -15,21 +12,30 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={cn(satoshi.variable, inter.variable)}>
+    <html
+      lang="en"
+      className={cn(satoshi.variable, inter.variable, geistMono.variable)}
+    >
       <body>
-        <TooltipProvider>
-          <Toaster closeButton className="pointer-events-auto" />
-          {children}
-          <DubAnalytics
-            cookieOptions={{
-              domain: process.env.NEXT_PUBLIC_VERCEL_ENV
-                ? `.${process.env.NEXT_PUBLIC_APP_DOMAIN}`
-                : undefined,
-            }}
-          />
-          <VercelAnalytics />
-          <SpeedInsights />
-        </TooltipProvider>
+        <RootProviders>{children}</RootProviders>
+
+        <Script id="set-theme" strategy="beforeInteractive">
+          {`
+          (() => {
+            // Only run on referrals embed page for now
+            if (window.location.pathname !== '/embed/referrals') return;
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const theme = urlParams.get('theme');
+
+            if (theme === 'dark' || (theme === 'system' && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+              document.body.classList.add("dark");
+            } else {
+              document.body.classList.remove("dark");
+            }
+          })();
+        `}
+        </Script>
       </body>
     </html>
   );

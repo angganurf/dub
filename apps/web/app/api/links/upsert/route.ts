@@ -7,10 +7,13 @@ import {
 } from "@/lib/api/links";
 import { parseRequestBody } from "@/lib/api/utils";
 import { withWorkspace } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { verifyFolderAccess } from "@/lib/folder/permissions";
 import { NewLinkProps } from "@/lib/types";
-import { createLinkBodySchema } from "@/lib/zod/schemas/links";
+import { sendWorkspaceWebhook } from "@/lib/webhook/publish";
+import { createLinkBodySchema, linkEventSchema } from "@/lib/zod/schemas/links";
+import { prisma } from "@dub/prisma";
 import { deepEqual } from "@dub/utils";
+import { waitUntil } from "@vercel/functions";
 import { NextResponse } from "next/server";
 
 // PUT /api/links/upsert – update or create a link
@@ -27,6 +30,30 @@ export const PUT = withWorkspace(
     });
 
     if (link) {
+      await Promise.all([
+        ...(link.folderId
+          ? [
+              verifyFolderAccess({
+                workspace,
+                userId: session.user.id,
+                folderId: link.folderId,
+                requiredPermission: "folders.links.write",
+              }),
+            ]
+          : []),
+
+        ...(body.folderId
+          ? [
+              verifyFolderAccess({
+                workspace,
+                userId: session.user.id,
+                folderId: body.folderId,
+                requiredPermission: "folders.links.write",
+              }),
+            ]
+          : []),
+      ]);
+
       // proceed with /api/links/[linkId] PATCH logic
       const updatedLink = {
         ...link,
@@ -35,6 +62,15 @@ export const PUT = withWorkspace(
             ? link.expiresAt.toISOString()
             : link.expiresAt,
         geo: link.geo as NewLinkProps["geo"],
+        testVariants: link.testVariants as NewLinkProps["testVariants"],
+        testCompletedAt:
+          link.testCompletedAt instanceof Date
+            ? link.testCompletedAt.toISOString()
+            : link.testCompletedAt,
+        testStartedAt:
+          link.testStartedAt instanceof Date
+            ? link.testStartedAt.toISOString()
+            : link.testStartedAt,
         ...body,
       };
 
@@ -75,6 +111,16 @@ export const PUT = withWorkspace(
         });
       }
 
+      // if domain and key are the same, we don't need to check if the key exists
+      const skipKeyChecks =
+        link.domain === updatedLink.domain &&
+        link.key.toLowerCase() === updatedLink.key?.toLowerCase();
+
+      // if externalId is the same, we don't need to check if it exists
+      const skipExternalIdChecks =
+        link.externalId?.toLowerCase() ===
+        updatedLink.externalId?.toLowerCase();
+
       const {
         link: processedLink,
         error,
@@ -82,10 +128,9 @@ export const PUT = withWorkspace(
       } = await processLink({
         payload: updatedLink,
         workspace,
-        // if domain and key are the same, we don't need to check if the key exists
-        skipKeyChecks:
-          link.domain === updatedLink.domain &&
-          link.key.toLowerCase() === updatedLink.key?.toLowerCase(),
+        skipKeyChecks,
+        skipExternalIdChecks,
+        skipFolderChecks: true,
       });
 
       if (error) {
@@ -97,22 +142,26 @@ export const PUT = withWorkspace(
 
       try {
         const response = await updateLink({
-          oldDomain: link.domain,
-          oldKey: link.key,
+          oldLink: {
+            domain: link.domain,
+            key: link.key,
+            image: link.image,
+          },
           updatedLink: processedLink,
         });
+
+        waitUntil(
+          sendWorkspaceWebhook({
+            trigger: "link.updated",
+            workspace,
+            data: linkEventSchema.parse(response),
+          }),
+        );
 
         return NextResponse.json(response, {
           headers,
         });
       } catch (error) {
-        if (error.code === "P2002") {
-          throw new DubApiError({
-            code: "conflict",
-            message: "A link with this externalId already exists.",
-          });
-        }
-
         throw new DubApiError({
           code: "unprocessable_entity",
           message: error.message,
@@ -137,18 +186,14 @@ export const PUT = withWorkspace(
         const response = await createLink(link);
         return NextResponse.json(response, { headers });
       } catch (error) {
-        if (error.code === "P2002") {
-          throw new DubApiError({
-            code: "conflict",
-            message: "A link with this externalId already exists.",
-          });
-        }
-
         throw new DubApiError({
           code: "unprocessable_entity",
           message: error.message,
         });
       }
     }
+  },
+  {
+    requiredPermissions: ["links.write"],
   },
 );

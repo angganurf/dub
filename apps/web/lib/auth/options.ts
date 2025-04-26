@@ -1,10 +1,16 @@
 import { isBlacklistedEmail } from "@/lib/edge-config";
-import jackson from "@/lib/jackson";
-import { prisma } from "@/lib/prisma";
+import { jackson } from "@/lib/jackson";
+import { isStored, storage } from "@/lib/storage";
+import { UserProps } from "@/lib/types";
+import { ratelimit } from "@/lib/upstash";
+import { sendEmail } from "@dub/email";
+import { subscribe } from "@dub/email/resend/subscribe";
+import { LoginLink } from "@dub/email/templates/login-link";
+import { WelcomeEmail } from "@dub/email/templates/welcome-email";
+import { prisma } from "@dub/prisma";
+import { PrismaClient } from "@dub/prisma/client";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
-import { sendEmail } from "emails";
-import LoginLink from "emails/login-link";
-import WelcomeEmail from "emails/welcome-email";
+import { waitUntil } from "@vercel/functions";
 import { User, type NextAuthOptions } from "next-auth";
 import { AdapterUser } from "next-auth/adapters";
 import { JWT } from "next-auth/jwt";
@@ -12,13 +18,32 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import EmailProvider from "next-auth/providers/email";
 import GithubProvider from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
-import { cookies } from "next/headers";
-import { dub } from "../dub";
-import { subscribe } from "../flodesk";
-import { isStored, storage } from "../storage";
-import { UserProps } from "../types";
+
+import { createId } from "../api/create-id";
+import { completeProgramApplications } from "../partners/complete-program-applications";
+import { FRAMER_API_HOST } from "./constants";
+import {
+  exceededLoginAttemptsThreshold,
+  incrementLoginAttempts,
+} from "./lock-account";
+import { validatePassword } from "./password";
+import { trackLead } from "./track-lead";
 
 const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
+
+const CustomPrismaAdapter = (p: PrismaClient) => {
+  return {
+    ...PrismaAdapter(p),
+    createUser: async (data: any) => {
+      return p.user.create({
+        data: {
+          ...data,
+          id: createId({ prefix: "user_" }),
+        },
+      });
+    },
+  };
+};
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -74,6 +99,7 @@ export const authOptions: NextAuthOptions = {
         if (!existingUser) {
           existingUser = await prisma.user.create({
             data: {
+              id: createId({ prefix: "user_" }),
               email: profile.email,
               name: `${profile.firstName || ""} ${
                 profile.lastName || ""
@@ -144,6 +170,7 @@ export const authOptions: NextAuthOptions = {
         if (!existingUser) {
           existingUser = await prisma.user.create({
             data: {
+              id: createId({ prefix: "user_" }),
               email: userInfo.email,
               name: `${userInfo.firstName || ""} ${
                 userInfo.lastName || ""
@@ -165,8 +192,117 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
+
+    // Sign in with email and password
+    CredentialsProvider({
+      id: "credentials",
+      name: "Dub.co",
+      type: "credentials",
+      credentials: {
+        email: { type: "email" },
+        password: { type: "password" },
+      },
+      async authorize(credentials, req) {
+        if (!credentials) {
+          throw new Error("no-credentials");
+        }
+
+        const { email, password } = credentials;
+
+        if (!email || !password) {
+          throw new Error("no-credentials");
+        }
+
+        const { success } = await ratelimit(5, "1 m").limit(
+          `login-attempts:${email}`,
+        );
+
+        if (!success) {
+          throw new Error("too-many-login-attempts");
+        }
+
+        const user = await prisma.user.findUnique({
+          where: { email },
+          select: {
+            id: true,
+            passwordHash: true,
+            name: true,
+            email: true,
+            image: true,
+            invalidLoginAttempts: true,
+            emailVerified: true,
+          },
+        });
+
+        if (!user || !user.passwordHash) {
+          throw new Error("invalid-credentials");
+        }
+
+        if (exceededLoginAttemptsThreshold(user)) {
+          throw new Error("exceeded-login-attempts");
+        }
+
+        const passwordMatch = await validatePassword({
+          password,
+          passwordHash: user.passwordHash,
+        });
+
+        if (!passwordMatch) {
+          const exceededLoginAttempts = exceededLoginAttemptsThreshold(
+            await incrementLoginAttempts(user),
+          );
+
+          if (exceededLoginAttempts) {
+            throw new Error("exceeded-login-attempts");
+          } else {
+            throw new Error("invalid-credentials");
+          }
+        }
+
+        if (!user.emailVerified) {
+          throw new Error("email-not-verified");
+        }
+
+        // Reset invalid login attempts
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            invalidLoginAttempts: 0,
+          },
+        });
+
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          image: user.image,
+        };
+      },
+    }),
+
+    // Framer
+    {
+      id: "framer",
+      name: "Framer",
+      type: "oauth",
+      clientId: process.env.FRAMER_CLIENT_ID,
+      clientSecret: process.env.FRAMER_CLIENT_SECRET,
+      checks: ["state"],
+      authorization: `${FRAMER_API_HOST}/auth/oauth/authorize`,
+      token: `${FRAMER_API_HOST}/auth/oauth/token`,
+      userinfo: `${FRAMER_API_HOST}/auth/oauth/profile`,
+      profile({ sub, email, name, picture }) {
+        return {
+          id: sub,
+          name,
+          email,
+          image: picture,
+        };
+      },
+    },
   ],
-  adapter: PrismaAdapter(prisma),
+  // @ts-ignore
+  adapter: CustomPrismaAdapter(prisma),
   session: { strategy: "jwt" },
   cookies: {
     sessionToken: {
@@ -184,14 +320,21 @@ export const authOptions: NextAuthOptions = {
     },
   },
   pages: {
+    signIn: "/login",
     error: "/login",
   },
   callbacks: {
     signIn: async ({ user, account, profile }) => {
       console.log({ user, account, profile });
+
       if (!user.email || (await isBlacklistedEmail(user.email))) {
         return false;
       }
+
+      if (user?.lockedAt) {
+        return false;
+      }
+
       if (account?.provider === "google" || account?.provider === "github") {
         const userExists = await prisma.user.findUnique({
           where: { email: user.email },
@@ -277,6 +420,33 @@ export const authOptions: NextAuthOptions = {
             }),
           ]);
         }
+        // Login with Framer
+      } else if (account?.provider === "framer") {
+        const userFound = await prisma.user.findUnique({
+          where: {
+            email: user.email,
+          },
+          include: {
+            accounts: true,
+          },
+        });
+
+        // account doesn't exist, let the user sign in
+        if (!userFound) {
+          return true;
+        }
+
+        const otherAccounts = userFound?.accounts.filter(
+          (account) => account.provider !== "framer",
+        );
+
+        // we don't allow account linking for Framer partners
+        // so redirect to the standard login page
+        if (otherAccounts && otherAccounts.length > 0) {
+          throw new Error("framer-account-linking-not-allowed");
+        }
+
+        return true;
       }
       return true;
     },
@@ -340,57 +510,49 @@ export const authOptions: NextAuthOptions = {
           new Date(user.createdAt).getTime() > Date.now() - 10000 &&
           process.env.NEXT_PUBLIC_IS_DUB
         ) {
-          await Promise.allSettled([
-            subscribe({ email, name: user.name || undefined }),
-            sendEmail({
-              subject: "Welcome to Dub.co!",
-              email,
-              react: WelcomeEmail({
+          waitUntil(
+            Promise.allSettled([
+              subscribe({ email, name: user.name || undefined }),
+              sendEmail({
                 email,
-                name: user.name || null,
+                replyTo: "steven.tey@dub.co",
+                subject: "Welcome to Dub.co!",
+                react: WelcomeEmail({
+                  email,
+                  name: user.name || null,
+                }),
+                // send the welcome email 5 minutes after the user signed up
+                scheduledAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                variant: "marketing",
               }),
-              marketing: true,
-            }),
-          ]);
-        }
-
-        const clickId = cookies().get("dclid")?.value;
-        if (clickId) {
-          // send lead event to Dub
-          await dub.track.lead({
-            clickId,
-            eventName: "Sign Up",
-            customerId: user.id,
-            customerName: user.name,
-            customerEmail: user.email,
-            customerAvatar: user.image,
-          });
-          // delete the clickId cookie
-          cookies().set("dclid", "", {
-            expires: new Date(0),
-            path: "/",
-            domain: VERCEL_DEPLOYMENT
-              ? `.${process.env.NEXT_PUBLIC_APP_DOMAIN}`
-              : undefined,
-          });
+              trackLead(user),
+            ]),
+          );
         }
       }
       // lazily backup user avatar to R2
       const currentImage = message.user.image;
       if (currentImage && !isStored(currentImage)) {
-        const { url } = await storage.upload(
-          `avatars/${message.user.id}`,
-          currentImage,
+        waitUntil(
+          (async () => {
+            const { url } = await storage.upload(
+              `avatars/${message.user.id}`,
+              currentImage,
+            );
+            await prisma.user.update({
+              where: {
+                id: message.user.id,
+              },
+              data: {
+                image: url,
+              },
+            });
+          })(),
         );
-        await prisma.user.update({
-          where: {
-            id: message.user.id,
-          },
-          data: {
-            image: url,
-          },
-        });
       }
+
+      // Complete any outstanding program applications
+      waitUntil(completeProgramApplications(message.user.id));
     },
   },
 };

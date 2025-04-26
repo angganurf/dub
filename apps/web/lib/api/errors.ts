@@ -34,6 +34,10 @@ const errorCodeToHttpStatus: Record<z.infer<typeof ErrorCode>, number> = {
   internal_server_error: 500,
 };
 
+export const httpStatusToErrorCode = Object.fromEntries(
+  Object.entries(errorCodeToHttpStatus).map(([code, status]) => [status, code]),
+) as Record<number, z.infer<typeof ErrorCode>>;
+
 const speakeasyErrorOverrides: Record<z.infer<typeof ErrorCode>, string> = {
   bad_request: "BadRequest",
   unauthorized: "Unauthorized",
@@ -118,7 +122,7 @@ export function fromZodError(error: ZodError): ErrorResponse {
 }
 
 export function handleApiError(error: any): ErrorResponse & { status: number } {
-  console.error("API error occurred", error);
+  console.error("API error occurred", error.message);
 
   // Zod errors
   if (error instanceof ZodError) {
@@ -137,6 +141,21 @@ export function handleApiError(error: any): ErrorResponse & { status: number } {
         doc_url: error.docUrl,
       },
       status: errorCodeToHttpStatus[error.code],
+    };
+  }
+
+  // Prisma record not found error
+  if (error.code === "P2025") {
+    return {
+      error: {
+        code: "not_found",
+        message:
+          error?.meta?.cause ||
+          error.message ||
+          "The requested resource was not found.",
+        doc_url: `${docErrorUrl}#not-found`,
+      },
+      status: 404,
     };
   }
 
@@ -184,6 +203,7 @@ export const errorSchemaFactory = (
                   example: code,
                 },
                 message: {
+                  "x-speakeasy-error-message": true,
                   type: "string",
                   description:
                     "A human readable explanation of what went wrong.",
@@ -213,7 +233,7 @@ export const exceededLimitError = ({
 }: {
   plan: PlanProps;
   limit: number;
-  type: "clicks" | "links" | "AI" | "domains" | "tags" | "users";
+  type: "clicks" | "links" | "AI" | "domains" | "tags" | "users" | "folders";
 }) => {
   return `You've reached your ${
     type === "links" || type === "AI" ? "monthly" : ""

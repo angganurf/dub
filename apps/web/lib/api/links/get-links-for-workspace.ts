@@ -1,7 +1,9 @@
-import { prisma } from "@/lib/prisma";
 import z from "@/lib/zod";
 import { getLinksQuerySchemaExtended } from "@/lib/zod/schemas/links";
-import { combineTagIds, transformLink } from "./utils";
+import { prisma } from "@dub/prisma";
+import { combineTagIds } from "../tags/combine-tag-ids";
+import { encodeKeyIfCaseSensitive } from "./case-sensitivity";
+import { transformLink } from "./utils";
 
 export async function getLinksForWorkspace({
   workspaceId,
@@ -10,32 +12,97 @@ export async function getLinksForWorkspace({
   tagIds,
   tagNames,
   search,
-  sort = "createdAt",
+  searchMode,
+  sort, // Deprecated
+  sortBy,
+  sortOrder,
   page,
+  pageSize,
   userId,
   showArchived,
   withTags,
+  folderId,
+  folderIds,
+  linkIds,
   includeUser,
+  includeWebhooks,
+  includeDashboard,
+  tenantId,
+  partnerId,
 }: z.infer<typeof getLinksQuerySchemaExtended> & {
   workspaceId: string;
+  folderIds?: string[];
 }) {
   const combinedTagIds = combineTagIds({ tagId, tagIds });
+
+  // support legacy sort param
+  if (sort && sort !== "createdAt") {
+    sortBy = sort;
+  }
+
+  if (searchMode === "exact" && search) {
+    try {
+      const url = new URL(search);
+      const domain = url.hostname;
+      const key = url.pathname.slice(1);
+
+      if (key) {
+        const encodedKey = encodeKeyIfCaseSensitive({
+          domain,
+          key,
+        });
+
+        search = search.replace(key, encodedKey);
+      }
+    } catch (e) {}
+  }
 
   const links = await prisma.link.findMany({
     where: {
       projectId: workspaceId,
+      AND: [
+        ...(folderIds
+          ? [
+              {
+                OR: [
+                  {
+                    folderId: {
+                      in: folderIds,
+                    },
+                  },
+                  {
+                    folderId: null,
+                  },
+                ],
+              },
+            ]
+          : [
+              {
+                folderId: folderId || null,
+              },
+            ]),
+        ...(search
+          ? [
+              {
+                ...(searchMode === "fuzzy" && {
+                  OR: [
+                    {
+                      shortLink: { contains: search },
+                    },
+                    {
+                      url: { contains: search },
+                    },
+                  ],
+                }),
+                ...(searchMode === "exact" && {
+                  shortLink: { startsWith: search },
+                }),
+              },
+            ]
+          : []),
+      ],
       archived: showArchived ? undefined : false,
       ...(domain && { domain }),
-      ...(search && {
-        OR: [
-          {
-            key: { contains: search },
-          },
-          {
-            url: { contains: search },
-          },
-        ],
-      }),
       ...(withTags && {
         tags: {
           some: {},
@@ -58,10 +125,12 @@ export async function getLinksForWorkspace({
               },
             }
           : {}),
+      ...(tenantId && { tenantId }),
+      ...(partnerId && { partnerId }),
       ...(userId && { userId }),
+      ...(linkIds && { id: { in: linkIds } }),
     },
     include: {
-      user: includeUser,
       tags: {
         include: {
           tag: {
@@ -73,14 +142,15 @@ export async function getLinksForWorkspace({
           },
         },
       },
+      user: includeUser,
+      webhooks: includeWebhooks,
+      dashboard: includeDashboard,
     },
     orderBy: {
-      [sort]: "desc",
+      [sortBy]: sortOrder,
     },
-    take: 100,
-    ...(page && {
-      skip: (page - 1) * 100,
-    }),
+    take: pageSize,
+    skip: (page - 1) * pageSize,
   });
 
   return links.map((link) => transformLink(link));

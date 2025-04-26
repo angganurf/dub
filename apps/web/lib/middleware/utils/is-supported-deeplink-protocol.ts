@@ -1,3 +1,14 @@
+const supportedDeeplinkProtocols = [
+  "mailto:",
+  "sms:",
+  "tel:",
+  "tg:",
+  "whatsapp:",
+  "xmpp:",
+];
+
 export const isSupportedDeeplinkProtocol = (url: string) => {
-  return url.startsWith("mailto:") || url.startsWith("tel:");
+  return supportedDeeplinkProtocols.some((protocol) =>
+    url.startsWith(protocol),
+  );
 };

@@ -1,14 +1,19 @@
 import { openApiErrorResponses } from "@/lib/openapi/responses";
 import { DomainSchema } from "@/lib/zod/schemas/domains";
-import { LinkSchema } from "@/lib/zod/schemas/links";
+import { LinkErrorSchema, LinkSchema } from "@/lib/zod/schemas/links";
 import { TagSchema } from "@/lib/zod/schemas/tags";
 import { WorkspaceSchema } from "@/lib/zod/schemas/workspaces";
-import { API_DOMAIN } from "@dub/utils";
 import { createDocument } from "zod-openapi";
+import { webhookEventSchema } from "../webhook/schemas";
+import { FolderSchema } from "../zod/schemas/folders";
 import { analyticsPath } from "./analytics";
+import { customersPaths } from "./customers";
 import { domainsPaths } from "./domains";
+import { embedTokensPaths } from "./embed-tokens";
+import { eventsPath } from "./events";
+import { foldersPaths } from "./folders";
 import { linksPaths } from "./links";
-import { metatagsPath } from "./metatags";
+import { partnersPaths } from "./partners";
 import { qrCodePaths } from "./qr";
 import { tagsPaths } from "./tags";
 import { trackPaths } from "./track";
@@ -33,26 +38,33 @@ export const document = createDocument({
   },
   servers: [
     {
-      url: API_DOMAIN,
+      url: "https://api.dub.co",
       description: "Production API",
     },
   ],
   paths: {
     ...linksPaths,
-    ...qrCodePaths,
     ...analyticsPath,
-    ...workspacesPaths,
+    ...eventsPath,
     ...tagsPaths,
+    ...foldersPaths,
     ...domainsPaths,
     ...trackPaths,
-    ...metatagsPath,
+    ...customersPaths,
+    ...partnersPaths,
+    ...workspacesPaths,
+    ...embedTokensPaths,
+    ...qrCodePaths,
   },
   components: {
     schemas: {
       LinkSchema,
       WorkspaceSchema,
       TagSchema,
+      FolderSchema,
       DomainSchema,
+      webhookEventSchema,
+      LinkErrorSchema,
     },
     securitySchemes: {
       token: {
@@ -65,27 +77,5 @@ export const document = createDocument({
     responses: {
       ...openApiErrorResponses,
     },
-  },
-  "x-speakeasy-globals": {
-    parameters: [
-      {
-        "x-speakeasy-globals-hidden": true,
-        name: "workspaceId",
-        in: "query",
-        required: true,
-        schema: {
-          type: "string",
-        },
-      },
-      {
-        "x-speakeasy-globals-hidden": true,
-        name: "projectSlug",
-        in: "query",
-        deprecated: true,
-        schema: {
-          type: "string",
-        },
-      },
-    ],
   },
 });

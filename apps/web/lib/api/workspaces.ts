@@ -1,135 +1,83 @@
-import { deleteDomainAndLinks } from "@/lib/api/domains";
-import { prisma } from "@/lib/prisma";
 import { storage } from "@/lib/storage";
-import { cancelSubscription } from "@/lib/stripe";
+import { WorkspaceProps } from "@/lib/types";
+import { prisma } from "@dub/prisma";
 import {
+  APP_DOMAIN_WITH_NGROK,
   DUB_DOMAINS_ARRAY,
   LEGAL_USER_ID,
   LEGAL_WORKSPACE_ID,
+  R2_URL,
 } from "@dub/utils";
 import { waitUntil } from "@vercel/functions";
-import { recordLink } from "../tinybird";
-import { WorkspaceProps } from "../types";
-import { redis } from "../upstash";
+import { qstash } from "../cron";
+import { cancelSubscription } from "../stripe/cancel-subscription";
+import { markDomainAsDeleted } from "./domains";
+import { linkCache } from "./links/cache";
 
 export async function deleteWorkspace(
-  workspace: Pick<WorkspaceProps, "id" | "slug" | "stripeId" | "logo">,
+  workspace: Pick<WorkspaceProps, "id" | "slug" | "logo" | "stripeId">,
 ) {
-  const [customDomains, defaultDomainLinks] = await Promise.all([
-    prisma.domain.findMany({
+  await Promise.all([
+    // Remove the users
+    prisma.projectUsers.deleteMany({
       where: {
         projectId: workspace.id,
-      },
-      select: {
-        slug: true,
       },
     }),
+
+    // Remove the default workspace
+    prisma.user.updateMany({
+      where: {
+        defaultWorkspace: workspace.slug,
+      },
+      data: {
+        defaultWorkspace: null,
+      },
+    }),
+  ]);
+
+  waitUntil(
+    Promise.all([
+      // Remove the API keys
+      prisma.restrictedToken.deleteMany({
+        where: {
+          projectId: workspace.id,
+        },
+      }),
+
+      // Cancel the workspace's Stripe subscription
+      workspace.stripeId && cancelSubscription(workspace.stripeId),
+
+      // Delete workspace logo if it's a custom logo stored in R2
+      workspace.logo &&
+        workspace.logo.startsWith(`${R2_URL}/logos/${workspace.id}`) &&
+        storage.delete(workspace.logo.replace(`${R2_URL}/`, "")),
+
+      // queue the workspace for deletion
+      queueWorkspaceDeletion({
+        workspaceId: workspace.id,
+      }),
+    ]),
+  );
+}
+
+export async function deleteWorkspaceAdmin(
+  workspace: Pick<WorkspaceProps, "id" | "slug" | "logo" | "stripeId">,
+) {
+  const [defaultDomainLinks, customDomains] = await Promise.all([
     prisma.link.findMany({
       where: {
-        projectId: workspace.id,
         domain: {
           in: DUB_DOMAINS_ARRAY,
         },
+        projectId: workspace.id,
       },
       select: {
         id: true,
         domain: true,
         key: true,
-        url: true,
-        tags: {
-          select: {
-            tagId: true,
-          },
-        },
-        proxy: true,
-        image: true,
-        projectId: true,
-        createdAt: true,
       },
     }),
-  ]);
-
-  const response = await prisma.projectUsers.deleteMany({
-    where: {
-      projectId: workspace.id,
-    },
-  });
-
-  waitUntil(
-    (async () => {
-      const linksByDomain: Record<string, string[]> = {};
-      defaultDomainLinks.forEach(async (link) => {
-        const { domain, key } = link;
-
-        if (!linksByDomain[domain]) {
-          linksByDomain[domain] = [];
-        }
-        linksByDomain[domain].push(key.toLowerCase());
-      });
-
-      const pipeline = redis.pipeline();
-
-      Object.entries(linksByDomain).forEach(([domain, links]) => {
-        pipeline.hdel(domain.toLowerCase(), ...links);
-      });
-
-      // delete all domains, links, and uploaded images associated with the workspace
-      await Promise.allSettled([
-        ...customDomains.map(({ slug }) => deleteDomainAndLinks(slug)),
-        // delete all default domain links from redis
-        pipeline.exec(),
-        // record deletes in Tinybird for default domain links
-        recordLink(
-          defaultDomainLinks.map((link) => ({
-            link_id: link.id,
-            domain: link.domain,
-            key: link.key,
-            url: link.url,
-            tag_ids: link.tags.map((tag) => tag.tagId),
-            workspace_id: link.projectId,
-            created_at: link.createdAt,
-            deleted: true,
-          })),
-        ),
-        // remove all images from R2
-        ...defaultDomainLinks.map(({ id, proxy, image }) =>
-          proxy && image?.startsWith(process.env.STORAGE_BASE_URL as string)
-            ? storage.delete(`images/${id}`)
-            : Promise.resolve(),
-        ),
-      ]);
-
-      await Promise.all([
-        // delete workspace logo if it's a custom logo stored in R2
-        workspace.logo?.startsWith(process.env.STORAGE_BASE_URL as string) &&
-          storage.delete(`logos/${workspace.id}`),
-        // if they have a Stripe subscription, cancel it
-        workspace.stripeId && cancelSubscription(workspace.stripeId),
-        // delete the workspace
-        prisma.project.delete({
-          where: {
-            slug: workspace.slug,
-          },
-        }),
-        prisma.user.updateMany({
-          where: {
-            defaultWorkspace: workspace.slug,
-          },
-          data: {
-            defaultWorkspace: null,
-          },
-        }),
-      ]);
-    })(),
-  );
-
-  return response;
-}
-
-export async function deleteWorkspaceAdmin(
-  workspace: Pick<WorkspaceProps, "id" | "slug" | "stripeId" | "logo">,
-) {
-  const [customDomains, _] = await Promise.all([
     prisma.domain.findMany({
       where: {
         projectId: workspace.id,
@@ -138,29 +86,38 @@ export async function deleteWorkspaceAdmin(
         slug: true,
       },
     }),
+  ]);
+
+  const [redisRes, prismaRes] = await Promise.allSettled([
+    linkCache.expireMany(defaultDomainLinks),
     prisma.link.updateMany({
       where: {
-        projectId: workspace.id,
-        domain: {
-          in: DUB_DOMAINS_ARRAY,
+        id: {
+          in: defaultDomainLinks.map((link) => link.id),
         },
       },
       data: {
-        userId: LEGAL_USER_ID,
         projectId: LEGAL_WORKSPACE_ID,
+        userId: LEGAL_USER_ID,
       },
     }),
   ]);
 
   // delete all domains, links, and uploaded images associated with the workspace
-  const deleteDomainsLinksResponse = await Promise.allSettled([
-    ...customDomains.map(({ slug }) => deleteDomainAndLinks(slug)),
-  ]);
+  const deleteDomainsLinksResponse = await Promise.allSettled(
+    customDomains.map(({ slug }) =>
+      markDomainAsDeleted({
+        domain: slug,
+        workspaceId: workspace.id,
+      }),
+    ),
+  );
 
-  const deleteWorkspaceResponse = await Promise.all([
+  const deleteWorkspaceResponse = await Promise.allSettled([
     // delete workspace logo if it's a custom logo stored in R2
-    workspace.logo?.startsWith(process.env.STORAGE_BASE_URL as string) &&
-      storage.delete(`logos/${workspace.id}`),
+    workspace.logo &&
+      workspace.logo.startsWith(`${R2_URL}/logos/${workspace.id}`) &&
+      storage.delete(workspace.logo.replace(`${R2_URL}/`, "")),
     // if they have a Stripe subscription, cancel it
     workspace.stripeId && cancelSubscription(workspace.stripeId),
     // delete the workspace
@@ -172,7 +129,25 @@ export async function deleteWorkspaceAdmin(
   ]);
 
   return {
+    redisRes,
+    prismaRes,
     deleteDomainsLinksResponse,
     deleteWorkspaceResponse,
   };
+}
+
+export async function queueWorkspaceDeletion({
+  workspaceId,
+  delay,
+}: {
+  workspaceId: string;
+  delay?: number;
+}) {
+  return await qstash.publishJSON({
+    url: `${APP_DOMAIN_WITH_NGROK}/api/cron/workspaces/delete`,
+    ...(delay && { delay }),
+    body: {
+      workspaceId,
+    },
+  });
 }

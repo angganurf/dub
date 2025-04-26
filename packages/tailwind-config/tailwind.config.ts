@@ -1,3 +1,4 @@
+import containerQueries from "@tailwindcss/container-queries";
 import forms from "@tailwindcss/forms";
 import typography from "@tailwindcss/typography";
 import scrollbarHide from "tailwind-scrollbar-hide";
@@ -26,22 +27,39 @@ const config: Config = {
       fontFamily: {
         display: ["var(--font-satoshi)", "system-ui", "sans-serif"],
         default: ["var(--font-inter)", "system-ui", "sans-serif"],
+        mono: [
+          "var(--font-geist-mono, ui-monospace)",
+          "ui-monospace",
+          "monospace",
+        ],
+      },
+      fontSize: {
+        "2xs": [
+          "0.625rem",
+          {
+            lineHeight: "0.875rem",
+          },
+        ],
       },
       animation: {
         // Modal
         "scale-in": "scale-in 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
         "fade-in": "fade-in 0.2s ease-out forwards",
+        "scale-in-fade": "scale-in-fade 0.2s ease-out forwards",
         // Popover, Tooltip
         "slide-up-fade": "slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
         "slide-right-fade":
           "slide-right-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
         "slide-down-fade": "slide-down-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
         "slide-left-fade": "slide-left-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
+        // Sheet
+        "slide-in-from-right": "slide-in-from-right 0.2s ease",
+        "slide-out-to-right": "slide-out-to-right 0.2s ease",
         // Navigation menu
-        "enter-from-right": "enter-from-right 0.25s ease",
-        "enter-from-left": "enter-from-left 0.25s ease",
-        "exit-to-right": "exit-to-right 0.25s ease",
-        "exit-to-left": "exit-to-left 0.25s ease",
+        "enter-from-right": "enter-from-right 0.15s ease",
+        "enter-from-left": "enter-from-left 0.15s ease",
+        "exit-to-right": "exit-to-right 0.15s ease",
+        "exit-to-left": "exit-to-left 0.15s ease",
         "scale-in-content": "scale-in-content 0.2s ease",
         "scale-out-content": "scale-out-content 0.2s ease",
         // Accordion
@@ -53,6 +71,8 @@ const config: Config = {
         spinner: "spinner 1.2s linear infinite",
         // Custom blink animation (for loading-dots)
         blink: "blink 1.4s infinite both",
+        // Custom pulse animation
+        pulse: "pulse 1s linear infinite alternate",
       },
       keyframes: {
         // Modal
@@ -64,22 +84,35 @@ const config: Config = {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },
         },
+        "scale-in-fade": {
+          "0%": { transform: "scale(0.95)", opacity: "0" },
+          "100%": { transform: "scale(1)", opacity: "1" },
+        },
         // Popover, Tooltip
         "slide-up-fade": {
-          "0%": { opacity: "0", transform: "translateY(2px)" },
+          "0%": { opacity: "0", transform: "translateY(var(--offset, 2px))" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
         "slide-right-fade": {
-          "0%": { opacity: "0", transform: "translateX(-2px)" },
+          "0%": { opacity: "0", transform: "translateX(var(--offset, -2px))" },
           "100%": { opacity: "1", transform: "translateX(0)" },
         },
         "slide-down-fade": {
-          "0%": { opacity: "0", transform: "translateY(-2px)" },
+          "0%": { opacity: "0", transform: "translateY(var(--offset, -2px))" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
         "slide-left-fade": {
-          "0%": { opacity: "0", transform: "translateX(2px)" },
+          "0%": { opacity: "0", transform: "translateX(var(--offset, 2px))" },
           "100%": { opacity: "1", transform: "translateX(0)" },
+        },
+        // Sheet
+        "slide-in-from-right": {
+          "0%": { transform: "translateX(100%)" },
+          "100%": { transform: "translateX(0)" },
+        },
+        "slide-out-to-right": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(100%)" },
         },
         // Navigation menu
         "enter-from-right": {
@@ -148,6 +181,15 @@ const config: Config = {
             opacity: "0.2",
           },
         },
+        // Custom pulse animation
+        pulse: {
+          from: {
+            opacity: "0",
+          },
+          to: {
+            opacity: "1",
+          },
+        },
       },
       colors: {
         brown: {
@@ -162,10 +204,59 @@ const config: Config = {
           800: "#846358",
           900: "#43302b",
         },
+
+        // Light/dark mode colors
+
+        "bg-emphasis": "rgb(var(--bg-emphasis, 229 229 229) / <alpha-value>)",
+        "bg-default": "rgb(var(--bg-default, 255 255 255) / <alpha-value>)",
+        "bg-subtle": "rgb(var(--bg-subtle, 245 245 245) / <alpha-value>)",
+        "bg-muted": "rgb(var(--bg-muted, 250 250 250) / <alpha-value>)",
+        "bg-inverted": "rgb(var(--bg-inverted, 23 23 23) / <alpha-value>)",
+
+        "bg-info": "rgb(var(--bg-info, 191 219 254) / <alpha-value>)",
+        "bg-success": "rgb(var(--bg-success, 220 252 231) / <alpha-value>)",
+        "bg-attention": "rgb(var(--bg-attention, 255 237 213) / <alpha-value>)",
+        "bg-error": "rgb(var(--bg-error, 254 226 226) / <alpha-value>)",
+
+        "border-emphasis":
+          "rgb(var(--border-emphasis, 163 163 163) / <alpha-value>)",
+        "border-default":
+          "rgb(var(--border-default, 212 212 212) / <alpha-value>)",
+        "border-subtle":
+          "rgb(var(--border-subtle, 229 229 229) / <alpha-value>)",
+        "border-muted": "rgb(var(--border-muted, 245 245 245) / <alpha-value>)",
+
+        "content-inverted":
+          "rgb(var(--content-inverted, 255 255 255) / <alpha-value>)",
+        "content-muted":
+          "rgb(var(--content-muted, 163 163 163) / <alpha-value>)",
+        "content-subtle":
+          "rgb(var(--content-subtle, 115 115 115) / <alpha-value>)",
+        "content-default":
+          "rgb(var(--content-default, 64 64 64) / <alpha-value>)",
+        "content-emphasis":
+          "rgb(var(--content-emphasis, 23 23 23) / <alpha-value>)",
+
+        "content-info": "rgb(var(--content-info, 29 78 216) / <alpha-value>)",
+        "content-success":
+          "rgb(var(--content-success, 21 128 61) / <alpha-value>)",
+        "content-attention":
+          "rgb(var(--content-attention, 194 65 12) / <alpha-value>)",
+        "content-error": "rgb(var(--content-error, 185 28 28) / <alpha-value>)",
+      },
+      dropShadow: {
+        "card-hover": ["0 8px 12px #222A350d", "0 32px 80px #2f30370f"],
       },
     },
   },
-  plugins: [forms, typography, scrollbarHide, radix],
+  plugins: [
+    forms,
+    typography,
+    scrollbarHide,
+    radix,
+    // TODO: Remove the container queries plugin when we upgrade to Tailwind v4
+    containerQueries,
+  ],
 };
 
 export default config;

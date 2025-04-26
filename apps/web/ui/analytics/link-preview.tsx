@@ -1,88 +1,80 @@
+import useWorkspace from "@/lib/swr/use-workspace";
 import { LinkProps } from "@/lib/types";
-import { BlurImage, CopyButton } from "@dub/ui";
-import {
-  GOOGLE_FAVICON_URL,
-  getApexDomain,
-  linkConstructor,
-  timeAgo,
-  truncate,
-} from "@dub/utils";
-import { Globe } from "lucide-react";
+import { CopyButton, LinkLogo } from "@dub/ui";
+import { ArrowTurnRight2, ArrowUpRight } from "@dub/ui/icons";
+import { getApexDomain, getPrettyUrl, linkConstructor } from "@dub/utils";
+import Link from "next/link";
+import { CommentsBadge } from "../links/comments-badge";
 
 export default function LinkPreviewTooltip({ data }: { data: LinkProps }) {
-  const { domain, key, url, createdAt } = data;
-  const apexDomain = getApexDomain(url);
+  const { slug } = useWorkspace();
+  const { domain, key, url, comments } = data;
+
+  const As = slug ? Link : "div";
 
   return (
-    <div className="relative flex w-[28rem] items-center justify-between px-4 py-2">
-      <div className="relative flex shrink items-center">
-        {url ? (
-          <BlurImage
-            src={`${GOOGLE_FAVICON_URL}${apexDomain}`}
-            alt={apexDomain}
-            className="h-8 w-8 rounded-full sm:h-10 sm:w-10"
-            width={20}
-            height={20}
+    <As
+      href={slug ? `/${slug}/links/${domain}/${key}` : "#"}
+      {...(slug && {
+        target: "_blank",
+        onClick: (e) => e.stopPropagation(),
+      })}
+      className="group relative flex w-[28rem] items-center justify-between px-4 py-2"
+    >
+      <div className="flex items-center gap-x-2">
+        <div className="relative flex-none rounded-full border border-neutral-200 bg-gradient-to-t from-neutral-100 pr-0.5 sm:p-2">
+          <LinkLogo
+            apexDomain={getApexDomain(url)}
+            className="h-4 w-4 shrink-0 transition-[width,height] sm:h-6 sm:w-6 group-data-[variant=loose]/card-list:sm:h-5 group-data-[variant=loose]/card-list:sm:w-5"
           />
-        ) : (
-          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-300 px-0 sm:h-10 sm:w-10">
-            <Globe className="h-4 w-4 text-gray-500 sm:h-5 sm:w-5" />
-          </div>
-        )}
-        {/* 
-              Here, we're manually setting ml-* values because if we do space-x-* in the parent div, 
-              it messes up the tooltip positioning.
-            */}
-        <div className="ml-2 sm:ml-4">
-          <div className="flex max-w-fit items-center space-x-2">
-            <a
-              className="w-full max-w-[140px] truncate text-sm font-semibold text-blue-800 sm:max-w-[300px] sm:text-base md:max-w-[360px] xl:max-w-[500px]"
-              href={linkConstructor({ domain, key })}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {truncate(
-                linkConstructor({
+        </div>
+        <div>
+          <div className="min-w-0 shrink grow-0 text-neutral-950">
+            <div className="flex items-center gap-2">
+              <a
+                href={linkConstructor({ domain, key })}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={linkConstructor({ domain, key, pretty: true })}
+                className="truncate text-sm font-semibold leading-6 text-neutral-800 transition-colors hover:text-black"
+              >
+                {linkConstructor({ domain, key, pretty: true })}
+              </a>
+              <CopyButton
+                value={linkConstructor({
                   domain,
                   key,
-                  pretty: true,
-                }),
-                32,
-              )}
-            </a>
-            <CopyButton value={linkConstructor({ domain, key })} />
+                  pretty: false,
+                })}
+                variant="neutral"
+                className="p-1.5"
+              />
+              {comments && <CommentsBadge comments={comments} />}
+            </div>
           </div>
-          <div className="flex max-w-fit items-center space-x-1">
-            {createdAt && (
-              <>
-                <p
-                  className="whitespace-nowrap text-sm text-gray-500"
-                  suppressHydrationWarning
-                >
-                  {timeAgo(createdAt)}
-                </p>
-                <p>•</p>
-              </>
-            )}
+          <div className="flex min-w-0 items-center gap-1 text-sm">
+            <ArrowTurnRight2 className="h-3 w-3 shrink-0 text-neutral-400" />
             {url ? (
               <a
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="xs:block hidden max-w-[240px] truncate text-sm font-medium text-gray-700 underline-offset-2 hover:underline"
+                title={url}
+                className="max-w-[20rem] truncate text-neutral-500 transition-colors hover:text-neutral-700 hover:underline hover:underline-offset-2"
               >
-                {url}
+                {getPrettyUrl(url)}
               </a>
             ) : (
-              <p className="xs:block hidden max-w-[240px] truncate text-sm font-medium text-gray-700 underline-offset-2 hover:underline">
-                No redirect configured
-              </p>
+              <span className="truncate text-neutral-400">
+                No URL configured
+              </span>
             )}
           </div>
         </div>
       </div>
-    </div>
+      <div className="flex size-8 items-center justify-center rounded-full bg-neutral-50 transition-colors group-hover:bg-neutral-100">
+        <ArrowUpRight className="size-3.5 text-neutral-400 transition-all group-hover:scale-110 group-hover:text-neutral-500" />
+      </div>
+    </As>
   );
 }

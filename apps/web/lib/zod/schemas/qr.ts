@@ -1,7 +1,7 @@
 import {
   DEFAULT_BGCOLOR,
   DEFAULT_FGCOLOR,
-  DEFAULT_INCLUDEMARGIN,
+  DEFAULT_MARGIN,
   QR_LEVELS,
 } from "@/lib/qr/constants";
 import z from "@/lib/zod";
@@ -10,6 +10,12 @@ import { parseUrlSchema } from "./utils";
 
 export const getQRCodeQuerySchema = z.object({
   url: parseUrlSchema.describe("The URL to generate a QR code for."),
+  logo: z
+    .string()
+    .optional()
+    .describe(
+      "The logo to include in the QR code. Can only be used with a paid plan on Dub.co.",
+    ),
   size: z.coerce
     .number()
     .optional()
@@ -38,10 +44,24 @@ export const getQRCodeQuerySchema = z.object({
     .describe(
       "The background color of the QR code in hex format. Defaults to `#ffffff` if not provided.",
     ),
+  hideLogo: booleanQuerySchema
+    .optional()
+    .default("false")
+    .describe(
+      "Whether to hide the logo in the QR code. Can only be used with a paid plan on Dub.co.",
+    ),
+  margin: z.coerce
+    .number()
+    .optional()
+    .default(DEFAULT_MARGIN)
+    .describe(
+      `The size of the margin around the QR code. Defaults to ${DEFAULT_MARGIN} if not provided.`,
+    ),
   includeMargin: booleanQuerySchema
     .optional()
-    .default(`${DEFAULT_INCLUDEMARGIN}`)
+    .default("true")
     .describe(
-      "Whether to include a margin around the QR code. Defaults to `false` if not provided.",
-    ),
+      "DEPRECATED: Margin is included by default. Use the `margin` prop to customize the margin size.",
+    )
+    .openapi({ deprecated: true }),
 });

@@ -2,7 +2,7 @@
 
 import useWorkspaces from "@/lib/swr/use-workspaces";
 import { Button, InputSelect, InputSelectItemProps } from "@dub/ui";
-import { DICEBEAR_AVATAR_URL } from "@dub/utils";
+import { OG_AVATAR_URL } from "@dub/utils";
 import { useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -16,7 +16,7 @@ export default function UpdateDefaultWorkspace() {
       ? workspaces.map((workspace) => ({
           id: workspace.slug,
           value: workspace.name,
-          image: workspace.logo || `${DICEBEAR_AVATAR_URL}${workspace.name}`,
+          image: workspace.logo || `${OG_AVATAR_URL}${workspace.name}`,
           disabled: workspace.slug === session?.user?.["defaultWorkspace"],
           label:
             workspace.slug === session?.user?.["defaultWorkspace"]
@@ -50,14 +50,15 @@ export default function UpdateDefaultWorkspace() {
         defaultWorkspace: selectedWorkspace?.id || undefined,
       }),
     });
+
     if (response.ok) {
       setSaving(false);
       update();
     } else {
+      setSaving(false);
       const { error } = await response.json();
       throw new Error(error.message);
     }
-    setSaving(false);
   }
 
   return (
@@ -69,13 +70,12 @@ export default function UpdateDefaultWorkspace() {
           success: "Successfully updated your default workspace!",
           error: (error) => error,
         });
-        setSaving(false);
       }}
-      className="rounded-lg border border-gray-200 bg-white"
+      className="rounded-lg border border-neutral-200 bg-white"
     >
       <div className="flex flex-col space-y-3 p-5 sm:p-10">
         <h2 className="text-xl font-medium">Your Default Workspace</h2>
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-neutral-500">
           Choose the workspace to show by default when you sign in.
         </p>
         <div className="mt-1 max-w-md">
@@ -88,11 +88,11 @@ export default function UpdateDefaultWorkspace() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between space-x-4 rounded-b-lg border-t border-gray-200 bg-gray-50 p-3 sm:px-10">
+      <div className="flex items-center justify-between space-x-4 rounded-b-lg border-t border-neutral-200 bg-neutral-50 p-3 sm:px-10">
         <a
           href="https://dub.co/help/article/how-to-change-default-workspace"
           target="_blank"
-          className="text-sm text-gray-500 underline underline-offset-4 hover:text-gray-700"
+          className="text-sm text-neutral-500 underline underline-offset-4 hover:text-neutral-700"
         >
           Learn more about how default workspaces work
         </a>
