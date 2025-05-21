@@ -1,7 +1,7 @@
 "use server";
 
+import { getDefaultProgramIdOrThrow } from "@/lib/api/programs/get-default-program-id-or-throw";
 import { prisma } from "@dub/prisma";
-import { getProgramOrThrow } from "../../api/programs/get-program-or-throw";
 import z from "../../zod";
 import { authActionClient } from "../safe-action";
 
@@ -16,12 +16,9 @@ export const rejectPartnerAction = authActionClient
   .schema(rejectPartnerSchema)
   .action(async ({ parsedInput, ctx }) => {
     const { workspace } = ctx;
-    const { programId, partnerId } = parsedInput;
+    const { partnerId } = parsedInput;
 
-    await getProgramOrThrow({
-      workspaceId: workspace.id,
-      programId,
-    });
+    const programId = getDefaultProgramIdOrThrow(workspace);
 
     const programEnrollment = await prisma.programEnrollment.findUniqueOrThrow({
       where: {

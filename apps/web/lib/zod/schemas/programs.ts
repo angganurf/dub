@@ -42,7 +42,7 @@ export const ProgramSchema = z.object({
   termsUrl: z.string().nullish(),
 });
 
-export const createProgramSchema = z.object({
+export const updateProgramSchema = z.object({
   name: z.string(),
   cookieLength: z.number().min(1).max(180),
   domain: z.string().nullable(),
@@ -65,6 +65,11 @@ export const createProgramSchema = z.object({
       message: "Minimum payout amount must be at least $100",
     }),
   linkStructure: z.nativeEnum(LinkStructure),
+
+  // Help & Support
+  supportEmail: z.string().email().max(255).nullish(),
+  helpUrl: z.string().url().max(500).nullish(),
+  termsUrl: z.string().url().max(500).nullish(),
 });
 
 export const ProgramPartnerLinkSchema = LinkSchema.pick({
@@ -80,12 +85,22 @@ export const ProgramPartnerLinkSchema = LinkSchema.pick({
 });
 
 export const ProgramEnrollmentSchema = z.object({
-  partnerId: z.string(),
-  tenantId: z.string().nullable(),
-  programId: z.string(),
+  partnerId: z.string().describe("The partner's unique ID on Dub."),
+  tenantId: z
+    .string()
+    .nullable()
+    .describe(
+      "The partner's unique ID within your database. Can be useful for associating the partner with a user in your database and retrieving/update their data in the future.",
+    ),
+  programId: z.string().describe("The program's unique ID on Dub."),
   program: ProgramSchema,
-  status: z.nativeEnum(ProgramEnrollmentStatus),
-  links: z.array(ProgramPartnerLinkSchema).nullable(),
+  status: z
+    .nativeEnum(ProgramEnrollmentStatus)
+    .describe("The status of the partner's enrollment in the program."),
+  links: z
+    .array(ProgramPartnerLinkSchema)
+    .nullable()
+    .describe("The partner's referral links in this program."),
   rewards: z.array(RewardSchema).nullish(),
   discount: DiscountSchema.nullish(),
   createdAt: z.date(),

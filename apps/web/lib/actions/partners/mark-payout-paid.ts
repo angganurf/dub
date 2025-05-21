@@ -1,7 +1,7 @@
 "use server";
 
 import { getPayoutOrThrow } from "@/lib/api/partners/get-payout-or-throw";
-import { getProgramOrThrow } from "@/lib/api/programs/get-program-or-throw";
+import { getDefaultProgramIdOrThrow } from "@/lib/api/programs/get-default-program-id-or-throw";
 import { prisma } from "@dub/prisma";
 import { z } from "zod";
 import { authActionClient } from "../safe-action";
@@ -16,18 +16,14 @@ export const markPayoutPaidAction = authActionClient
   .schema(markPayoutPaidSchema)
   .action(async ({ parsedInput, ctx }) => {
     const { workspace } = ctx;
-    const { programId, payoutId } = parsedInput;
+    const { payoutId } = parsedInput;
 
-    const [_program, payout] = await Promise.all([
-      getProgramOrThrow({
-        workspaceId: workspace.id,
-        programId,
-      }),
-      getPayoutOrThrow({
-        payoutId,
-        programId,
-      }),
-    ]);
+    const programId = getDefaultProgramIdOrThrow(workspace);
+
+    const payout = await getPayoutOrThrow({
+      payoutId,
+      programId,
+    });
 
     await Promise.all([
       prisma.payout.update({
