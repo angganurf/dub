@@ -13,7 +13,7 @@ export const GET = withPartnerProfile(
       programId: params.programId,
     });
     let { linkId, domain, key, ...rest } =
-      partnerProfileAnalyticsQuerySchema.parse(searchParams);
+      partnerProfileAnalyticsQuerySchema.parse(searchParams) as any;
 
     if (!linkId && domain && key) {
       const link = await prisma.link.findUnique({
