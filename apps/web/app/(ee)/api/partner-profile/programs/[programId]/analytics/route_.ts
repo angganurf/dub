@@ -12,7 +12,6 @@ export const GET = withPartnerProfile(
       partnerId: partner.id,
       programId: params.programId,
     });
- // @ts-nocheck
     let { linkId, domain, key, ...rest } =
       partnerProfileAnalyticsQuerySchema.parse(searchParams);
 
