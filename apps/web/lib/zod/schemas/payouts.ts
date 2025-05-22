@@ -72,10 +72,8 @@ export const PayoutResponseSchema = PayoutSchema.merge(
       .nullish(),
   }),
 );
-
 export const PartnerPayoutResponseSchema = PayoutResponseSchema.omit({
   partner: true,
-  _count: true,
 }).merge(
   z.object({
     program: ProgramSchema.pick({
