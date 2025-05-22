@@ -26,7 +26,7 @@ export const GET = withPartnerProfile(
     });
 
     let { linkId, domain, key, ...rest } =
-      partnerProfileEventsQuerySchema.parse(searchParams);
+      partnerProfileEventsQuerySchema.parse(searchParams) as any;
 
     if (!linkId && domain && key) {
       const link = await prisma.link.findUnique({
