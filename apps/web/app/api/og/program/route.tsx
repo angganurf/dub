@@ -4,7 +4,7 @@ import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
 import { SVGProps } from "react";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const DARK_CELLS = [
   [2, 3],
