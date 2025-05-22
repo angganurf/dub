@@ -16,7 +16,7 @@ import { AxiomRequest, withAxiom } from "next-axiom";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
