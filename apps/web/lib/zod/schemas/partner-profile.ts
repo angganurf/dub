@@ -104,7 +104,11 @@ export const partnerProfileAnalyticsQuerySchema = analyticsQuerySchema.omit({
   tagId: true,
   tagIds: true,
   folderId: true,
-});
+}).extend({
+    linkId: z.string().optional(),
+    domain: z.string().optional(),
+    key: z.string().optional(),
+  });
 
 export const partnerProfileEventsQuerySchema = eventsQuerySchema.omit({
   workspaceId: true,
